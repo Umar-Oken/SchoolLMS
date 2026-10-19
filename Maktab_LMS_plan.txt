@@ -1,0 +1,2930 @@
+MAKTAB LMS: BACKEND UCHUN DARSLARGA BO‘LINGAN PROMPTLAR
+Versiya: 1.0 | Sana: 16.10.2026 | Til: o‘zbekcha | Format: UTF-8 TXT
+Asos: “Maktab_LMS_Arxitektura_15_Dars.pdf” backend arxitekturasi.
+
+NATIJA VA FOYDALANISH
+--------------------
+Bu fayl tayyor backend kodi emas. Kod yordamchisi/Codex bilan bosqichma-bosqich
+ishlash uchun nusxalab yuboriladigan promptlar to‘plami.
+15 mavzuli dars, 90 asosiy prompt + 6 ta operator API va 2 ta deploy/storage prompti = 98 amaliy
+prompt. P000 - ularni boshqaradigan umumiy ko‘rsatma, 98 hisobiga kirmaydi.
+4-darsdagi P023-A...F katalog/roster APIlarini alohida quradi. Shu tariqa keyingi
+frontend yil, sinf yoki enrollment yaratish uchun DB/seedga muhtoj bo‘lmaydi.
+
+Avval P000ni yuboring. Keyin mundarijadagi tartibda faqat bitta prompt yuboring.
+Oldingi promptning qabul mezonlari tekshirilgach keyingisiga o‘ting. P023dan keyin
+P023-A, B, C, D, E, F; undan so‘ng P024. P081dan keyin P081-A, P081-B;
+undan so‘ng P082. Qolganlari raqam bo‘yicha.
+Yangi chat yoki kontekst yo‘qolganda P000 va docs/backend-progress.mdni bering,
+so‘ng birinchi tugamagan promptni yuboring. Butun TXTni bir martada bajarishni
+so‘ramang. Mavjud repositoryga moslansin, har safar yangi loyiha ochmasin.
+
+Har bir PROMPT BOSHI ... PROMPT OXIRI bloki birgalikda ko‘chiriladi. Uning ichida:
+- maqsad va oldingi dependency;
+- ayni bosqich stacki va yangi dependency;
+- koddan oldin o‘rganiladigan tushunchalar;
+- aniq bajariladigan ishlar;
+- shu bosqichda qilinmaydigan ishlar;
+- tekshirish/qabul mezoni va rasmiy manbalar bor.
+
+O‘QITISH RITMI
+--------------
+Har promptda: tushuncha > kichik misol > cheklangan kod > API tekshiruvi > izoh.
+Bitta prompt odatda 15-40 daqiqa; concurrency, scan, restore yoki deploy ko‘proq
+vaqt oladi. 15 dars - mavzuli guruhlash; har guruhning hamma prompti qat’iy
+3 soatda tugaydi degan va’da emas. Takroriy test/CI va ayrim amaliy ishlar uyga
+berilishi mumkin. Frontend olib tashlangani vaqtni backendni chuqurroq o‘rganish,
+HTTP client va testlarga ajratadi.
+
+Bir vaqtning o‘zida stackning hammasini o‘rnatmang. “Yangi dependency” shu
+bosqichda nimani qo‘shishni ko‘rsatadi; mavjud mos paket qayta o‘rnatilmaydi.
+Avval u nima, qaysi muammoni hal qiladi va nega kerakligi tushuntiriladi.
+
+ASOSIY TEXNOLOGIYALAR: NIMA UCHUN VA QACHON
+-----------------------------------------
+1-dars: Python 3.12, Django 5.2 LTS liniyasi, mos DRF, PostgreSQL/psycopg,
+Docker Compose, pytest-django, drf-spectacular.
+- Django: ORM, auth, migratsiya, session; DRF: HTTP/JSON va API contract.
+- PostgreSQL: doimiy ma’lumot, FK/unique/check, transaction va row lock.
+- Docker: bir xil muhit; Compose: servislarni birgalikda ishga tushirish.
+- pytest: biznes oqimi uchun test; OpenAPI: keyingi frontend bilan contract.
+Python/Django versiya tanlovi mavjud repo va supportga qarab lock qilinadi;
+“eng yangi versiya” yoki “latest” tagi ko‘r-ko‘rona ishlatilmaydi.
+
+5-dars: private local storage, detected MIME adapteri; productionda S3-compatible
+private bucket/django-storages. PDF/JPEG/PNG upload, MIME/size/ownership nazorati.
+10-dars: Redis, Celery, Celery Beat va haqiqiy antivirus adapteri.
+- Redis: broker/cache, asosiy baho yoki javobning yagona saqlash joyi emas.
+- Celery: scan, notification, AI kabi fon ishlari; Beat: davriy trigger.
+13-dars: django-filter, Redis cache; ORM profiling va kerakli indekslar.
+14-dars: Ruff/CI, Gunicorn, Nginx, TLS config, health/log va backup/restore.
+15-dars: pypdf, bitta provider adapteri, HTTPX yoki mos SDK; worker va JSON schema.
+AI provayderi/credential mavjud bo‘lmasa uning chaqirig‘i ishladi deb da’vo
+qilinmaydi. Mock test bilan integration tayyorlanadi, real ulanish blocker
+sifatida ko‘rsatiladi. RAG/pgvector va pupil AI chat bu yadroning sharti emas.
+
+HOZIR QO‘SHILMAYDI
+-----------------
+React, Vite, TypeScript, UI/HTML layout, frontend routing/state, mobile app,
+GraphQL, microservices, Kubernetes, public registration, parent roli, davlat
+integratsiyasi, avtomatik jadval solveri, video transcode, to‘liq adaptiv ML.
+Keyingi frontend backendning tasdiqlangan OpenAPI va auth/file contractiga
+qarab alohida quriladi.
+
+ARXITEKTURA KELISHUVI
+--------------------
+- Bir maktab; role faqat pupil/teacher. manage_accounts/manage_academics -
+  tanlangan teacher capabilitylari; Django superuser texnik vosita.
+- Accounts, academics, learning, files, assignments, assessments, scheduling,
+  communications, core va ai kabi app faqat ehtiyoj bosqichida ochiladi.
+- User birinchi migrate’dan OLDIN custom qilinadi. DB/historyni reset qilish yo‘q.
+- Session auth bosh tanlov: Django CSRF-himoyalangan login/logout. Kelajak
+  same-origin frontend /api/ orqali ishlaydi; JWT/CORS wildcard shart emas.
+- Global IsAuthenticated; list scope, detail permission, writable parent FK
+  validation va service biznes qoidalari birgalikda ishlaydi.
+- Oddiy CRUD - generics/mixins/ViewSet; workflow - tor action + service;
+  agregatsiya - output Serializer bilan APIView/GenericAPIView.
+- UTC aware datetime, mahalliy maktab zonasi Asia/Tashkent; Decimal ball.
+- Bahoning totalini server hisoblaydi; question kaliti pupil payloadga kirmaydi.
+- Published kontent/rubric va submitted revision izsiz overwrite qilinmaydi.
+- Private fayl bytes storage’da, metadata DBda. Clean bo‘lmagani ochilmaydi.
+- Transaction muhim DB amallarida; broker ishonchliligi outbox + idempotent
+  consumer. Bitta Beat; cache brokerdan productionda ajratiladi.
+- Faqat sintetik test ma’lumoti. Secret, login body, session va pupil matni logga
+  yozilmaydi. Zarur audit minimal model sifatida birinchi real ehtiyojda qo‘shiladi.
+- Error contract yakuni: code/message/fields/request_id. 409 kerak bo‘lsa tor
+  custom APIException yaratiladi/reuse qilinadi; katta framework yozilmaydi.
+- Ommaviy parent o‘zgartirish/delete tarixni buzmasin; yopiq termga write gate
+  keyingi topic/assignment/grade servicelariga ham tatbiq qilinadi.
+- Published assignment deadline o‘zgarishi audit va deadline_version bilan;
+  rubric/shart boshqa qoidada immutable. End-to-end fake scan real emas.
+
+P000: UMUMIY BOSHQARUV PROMPTI
+==============================
+PROMPT BOSHI [P000]
+Sen senior Python/Django backend engineer va o‘quv mentorisan. Biz Django MVTni
+biladigan o‘quvchilar bilan maktab LMS backendini quramiz. Faqat pupil va teacher
+roli bor. Hozir frontend yozilmaydi. Ushbu fayldagi arxitektura kelishuvi, prompt
+IDlari, dependencylar va cheklovlarga amal qil.
+Texnik kelishuv: Python 3.12 + Django 5.2 LTS liniyasi + mos DRF + PostgreSQL.
+Mavjud mos stackni sababsiz almashtirma. Session auth va CSRF-himoyalangan login;
+ommaviy signup/JWT hozir yo‘q. manage_accounts/manage_academics tanlangan teacher
+capabilitylari, uchinchi biznes role emas. Global IsAuthenticated; queryset scope,
+object permission va parent FK validatsiya birga. Oddiy CRUDga generics/mixins,
+workflowga action+service. UTC aware datetime, Asia/Tashkent local display, Decimal
+ball. Fayl private va clean scan’dan keyin; grade/answer DBda, cache yagona nusxa
+emas. Submitted revision/published rubric tarixi saqlanadi. Redis/Celery/Beat,
+private S3, Nginx va AI faqat ularning prompti kelganda qo‘shiladi. Custom User
+birinchi migrate’dan oldin. Code va testda sintetik ma’lumot; secretni loglama.
+
+1. Avval repository/AGENTS.md, settings, requirements/lock, migrations, testlar
+va docs/backend-progress.mdni ko‘r. Mavjud mos kodni saqla; bo‘sh loyiha deb
+faraz qilma. Kerakli dependency bajarilmagan bo‘lsa keyingi katta featurega
+sakrama: nima yetishmasligini aniq ayt, mustaqil tekshirishni davom ettir.
+2. Ayni promptdagi texnologiyani avval sodda o‘zbekcha tushuntir: nima, qaysi
+muammoni hal qiladi, bizda qayerda ishlaydi. 1 kichik misol va “DRF nima qiladi /
+biz yozadigan service nima qiladi” farqini ber. 150-300 so‘z odatda yetarli.
+3. Yangi dependency bo‘lsa mosligi va rasmiy hujjatini tekshir; mavjud lockni
+sababsiz almashtirma. Faqat shu prompt uchun zarur paketni qo‘sh. Secret so‘rama
+va chiqarmagin; configured environment yo‘q bo‘lsa aniq blocker yoz.
+4. 3-5 bandli kichik implementatsiya rejasi tuz, so‘ng faqat joriy prompt scope’ini
+bajar. Keraksiz qo‘shni modullarni qurma. Business rule/permission qatorlarini
+izohla, har qatorga keraksiz comment yozma. Oddiy CRUDga tayyor DRF vositasini tanla.
+5. Tor, mazmunli testlar va tekshirish komandalarini bajar. DB constraint yoki
+concurrency real PostgreSQLda; boshqa servislar unit testda adapter/mocks bilan.
+Bajarilmagan tekshiruvni “passed” dema. Hujjat-only bosqichga sun’iy test yozma.
+Destruktiv DB reset/migration o‘chirish yo‘q.
+6. HTTP endpoint qo‘shilsa method/path, input/output, permission, success/error
+status va curl/HTTP misolini yoz. Auth uchun CSRF+cookie jarni ko‘rsat. Middleware,
+model yoki test bosqichida yangi endpoint majburan yaratma.
+7. Har prompt yakuni: o‘zgargan real fayllar, nega tanlangan DRF vositasi, tekshiruv
+natijasi, qolgan blocker va 2 ta tushunishni tekshiruvchi savol. Savol berish kodni
+boshlash uchun approval talabi emas; o‘quvchi keyin javob beradi.
+8. docs/backend-progress.mdga joriy ID va holatni yoz: verified faqat tekshiruv
+bilan; aks holda implemented_unverified yoki blocked. Keyingi IDni tavsiya qil,
+lekin uning kodini boshlama. Shu prompt tugagach to‘xta.
+9. Mode=implement default: izohdan keyin shu kichik ishni bajar. Men Mode=study
+yozsam faqat tushuntirish, misol va mashq ber; kod fayllarini o‘zgartirma. Study
+promptni avtomatik verified qilma. Study’dan keyin ayni IDni implementda qayta beraman.
+10. Repositoryga kirish imkoni bo‘lmasa uydirma audit/test natijasi yozma. Zarur
+fayl mazmunini so‘ra yoki shu scope uchun to‘liq, fayl nomlari bilan kod ko‘rsat.
+Keyingi bosqichni yoki frontendni avtomatik davom ettirma.
+PROMPT OXIRI [P000]
+
+PROMPTLAR MUNDARIJASI
+====================
+
+01-DARS. Muhit, custom user va ilk API
+Maqsad: Docker, Django, PostgreSQL, HTTP, DRF va test nima uchun kerakligini tushunish.
+  P001: Repository auditi va backend chegarasini belgilash
+  P002: Django loyihasini migratsiyasiz ochish
+  P003: Birinchi migratsiyadan oldin custom User
+  P004: PostgreSQL bilan birinchi migrate
+  P005: Request/Response bilan bitta o‘quv endpointi
+  P006: Test va OpenAPI boshlang‘ich asosi
+
+02-DARS. Akademik ma’lumotlar va fan API
+Maqsad: Yil, chorak, sinf va fanning o‘zaro aloqasi; ORMdan JSONgacha.
+  P007: AcademicYear va Term modellari
+  P008: Sinf, fan katalogi va CourseOffering
+  P009: Teacherning coursega biriktirilishi
+  P010: Pupil membership va Enrollment
+  P011: Takror ishlaydigan synthetic seed
+  P012: Fanlar ro‘yxati va detail read API
+
+03-DARS. Login, parol va vakolat
+Maqsad: Pupil/teacher shaxsi bilan qaysi obyektga kirish mumkinligini ajratish.
+  P013: CSRF va session login
+  P014: Logout va current-user profili
+  P015: Parol almashtirish va birinchi kirish cheklovi
+  P016: Course scope va object permissionni bir joyga jamlash
+  P017: Operator teacher capabilitylari
+  P018: Hisob berish va nazoratli reset API
+
+04-DARS. Kurs va mavzu boshqaruvi
+Maqsad: Tayyor DRF view/mixinlardan foydalangan holda kichik CRUD va publish.
+  P019: Topic modeli va read API
+  P020: Teacherning bitta draft mavzu yaratishi
+  P021: Draft mavzuni tahrirlash va arxivlash
+  P022: Mavzuni nashr qilish actioni
+  P023: Akademik tuzilmaning cheklangan boshqaruv APIlari
+  P023-A: AcademicYear/Term boshqaruv API
+  P023-B: SchoolClass katalog API
+  P023-C: Subject katalog API
+  P023-D: Teacher assignment boshqaruv API
+  P023-E: Pupilni sinfga biriktirish va ko‘chirish API
+  P023-F: Course roster va enrollment reconciliation
+  P024: 4-dars yakuni: mavzu API regression va contract
+
+05-DARS. Resurs va yopiq fayllar
+Maqsad: Multipart, private storage, video havola va completion.
+  P025: Attachment modeli va local private storage
+  P026: Multipart upload va kirish validatsiyasi
+  P027: Mavzuga PDF resurs biriktirish
+  P028: Video va havola turidagi resurs
+  P029: Private faylni ruxsat bilan yuklab olish
+  P030: Mavzu completion: o‘qildi belgisi
+
+06-DARS. Uy vazifasi va rubric
+Maqsad: Shart, vaqt chegaralari, mezon va ball taqsimoti.
+  P031: Assignment modeli va vaqt qoidasi
+  P032: RubricCriterion va Level modellari
+  P033: Faqat draft vazifa yaratish API
+  P034: Rubricni atomar tahrirlash endpointi
+  P035: Vazifani publish qilish va rubricni qulflash
+  P036: Pupil vazifa list/detail va vaqt holati
+
+07-DARS. Draft va yakuniy topshirish
+Maqsad: Revision, idempotency va deadline tekshiruvi.
+  P037: Submission konteyneri va draft matni
+  P038: Draftga clean fayl biriktirish
+  P039: Final submit: bitta revisionni freeze qilish
+  P040: Submit uchun persistent idempotency key
+  P041: Teacher return va yangi revision bilan qayta topshirish
+  P042: Submit concurrency va dars yakuni tekshiruvi
+
+08-DARS. Baholash va jurnal
+Maqsad: Server hisobi, draft/published farqi va baho tarixi.
+  P043: Grade va CriterionScore modellari
+  P044: Teacher uchun draft baho yozish
+  P045: Bahoni pupilga e’lon qilish
+  P046: Qayta baholash va o‘zgarmas audit
+  P047: Pupilning shaxsiy jurnal API
+  P048: Teacher jurnali va tekshirish navbati
+
+09-DARS. Jadval va davomat
+Maqsad: Sana/vaqt, interval to‘qnashuvi va real dars sessioni.
+  P049: Room va WeeklySlot: qo‘lda dars jadvali
+  P050: Jadval to‘qnashuvining DB transaction himoyasi
+  P051: Real LessonSession va sana kesimidagi read API
+  P052: Bitta sanadagi darsni ko‘chirish yoki bekor qilish
+  P053: Bitta dars davomatini atomar belgilash
+  P054: Davomat read va tuzatish tarixini tekshirish
+
+10-DARS. Redis, Celery va bildirishnoma
+Maqsad: Fon ishini bajarish, takror delivery va nosozlikdan tiklanish.
+  P055: Redis va Celeryni alohida tushunib ulash
+  P056: DB outbox va takror deliveryga chidamli dispatcher
+  P057: Course e’loni va publish eventi
+  P058: In-app notification va o‘qilganlik
+  P059: Deadline yaqinlashganda eslatma
+  P060: Haqiqiy antivirus scan worker
+
+11-DARS. Savol banki va nazorat yaratish
+Maqsad: Single-choice/essay, exam snapshot va yashirin kalit.
+  P061: Single-choice savol banki
+  P062: Essay turi va savol versiyasi
+  P063: Nazoratning draft metadata API’si
+  P064: Examga savollarni bog‘lash
+  P065: Exam publish va immutable snapshot
+  P066: Kalitsiz pupil nazorat kartasi
+
+12-DARS. Vaqtli nazoratni bajarish
+Maqsad: Start, autosave, finish, qo‘lda baho va timeout.
+  P067: Nazorat urinishini bir marta boshlash
+  P068: Attempt resume va versionli javob autosave
+  P069: Idempotent finish va objective score
+  P070: Essay baholash va natijani chiqarish
+  P071: Expired attemptni fon va API orqali yakunlash
+  P072: Attempt lifecycle concurrency regression
+
+13-DARS. Dashboard va API samaradorligi
+Maqsad: Progress, filtr, sahifalash, query profiling va cache.
+  P073: Pupil dashboard API
+  P074: Teacher dashboard va tekshirish summary
+  P075: Filtering va paginationni izchil qilish
+  P076: N+1 query va kerakli indekslar
+  P077: Scope bilan xavfsiz timetable cache
+  P078: API xatolari va frontend uchun izchil contract
+
+14-DARS. Backend sifati va staging
+Maqsad: Security regression, CI, deploy, health va backup/restore.
+  P079: Permission regression va cheklangan abuse nazorati
+  P080: Backend CI pipeline
+  P081: Production backend container va reverse proxy
+  P081-A: Nginx reverse proxy, TLS va edge limit
+  P081-B: Private S3-compatible storage adapteri
+  P082: Health, request ID va fon ishlarini kuzatish
+  P083: Backup va amaliy restore mashqi
+  P084: Backend staging qabul va rollback hujjati
+
+15-DARS. AI qoralama va backend qabul
+Maqsad: Cheklangan AI job, teacher review va frontend uchun tayyor contract.
+  P085: AIJob va provider interfeysi
+  P086: AI qoralama so‘rovi, kvota va status API
+  P087: PDFdan AI uchun cheklangan matn ajratish
+  P088: AI worker: savol qoralamasini olish va tekshirish
+  P089: Teacher review, edit/reject va idempotent approve
+  P090: Backend yakuniy qabul va frontendga topshirish
+
+Dars checkpointi: guruhdagi barcha promptlar verified yoki aniq qayd qilingan
+asosli blockerga ega bo‘lsin. Keyingi dependency ishlamaydigan blocker bo‘lsa
+keyingi darsning uni talab qiladigan promptiga o‘tilmaydi.
+
+AMALIY PROMPTLAR
+================
+
+==============================================================================
+01-DARS: MUHIT, CUSTOM USER VA ILK API
+==============================================================================
+
+PROMPT BOSHI [P001]
+P001 | Repository auditi va backend chegarasini belgilash
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P000 bajarilgan va tekshirilgan.
+Stack: Git, Markdown; tanlov uchun Python/Django/DRF haqida umumiy tushuncha.
+Yangi dependency/qism: Hozir paket o‘rnatilmaydi.
+Avval tushuntir: MVT/API farqi; modulli monolit; dependency va lockfile nimaga kerak.
+Faqat shu ishlarni bajar:
+  1) Mavjud repository va AGENTS.md ko‘rsatmalarini ko‘r. Kod bo‘lmasa buni aniq yoz; mavjud ishni
+    o‘chirma.
+  2) docs/backend-scope.md: bir maktab, pupil/teacher, backend-only, session auth va 15 dars
+    chegarasi. docs/backend-progress.md uchun prompt holatlari shabloni yarat.
+  3) Python 3.12 + Django 5.2 LTS liniyasi va mos DRF tayanchini taklif qil; mavjud mos versiyani
+    sababsiz almashtirma. Paket versiyalarini real muhitga qarab keyin lock qil.
+Scope cheklovi: Biznes model, login, Redis, Celery yoki frontend qurma.
+Qabul mezoni/tekshiruv:
+  - Bu bosqich faqat hujjat: app/model/migration yaratilmasin.
+  - Backend scope va keyingi P002 kirish sharti yozilsin.
+Rasmiy manbalar:
+  [R01] Django versiya/support: https://www.djangoproject.com/download/
+Natijani P000 formatida ber, progressga P001ni yoz va to‘xta.
+PROMPT OXIRI [P001]
+
+PROMPT BOSHI [P002]
+P002 | Django loyihasini migratsiyasiz ochish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P001 bajarilgan va tekshirilgan.
+Stack: Python 3.12, venv yoki mavjud package manager, Django.
+Yangi dependency/qism: Django va tanlangan dependency lock vositasi.
+Avval tushuntir: Virtual environment; settings; SECRET_KEY/env; development va production config
+farqi.
+Faqat shu ishlarni bajar:
+  1) Bo‘sh loyihada backend/ va Django config skeletini yarat; mavjud bo‘lsa shu tuzilishga moslash.
+  2) .env.example, .gitignore va reproducible dependency lock qo‘sh. Secretlarning haqiqiy qiymatini
+    log/commitga yozma.
+  3) Hozir migrate qilma: custom User keyingi promptda birinchi migratsiyadan oldin sozlanadi.
+Scope cheklovi: Default User bilan migrate, PostgreSQL container, DRF endpoint yoki Celery qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Import/settings check ishlasin; DB talab qiladigan buyruqni hali bajarmaslik sababini yoz.
+  - Lockfile va ishga tushirish komandasi ko‘rsatilsin.
+Rasmiy manbalar:
+  [R01] Django versiya/support: https://www.djangoproject.com/download/
+  [R02] Custom User: https://docs.djangoproject.com/en/5.2/topics/auth/customizing/
+Natijani P000 formatida ber, progressga P002ni yoz va to‘xta.
+PROMPT OXIRI [P002]
+
+PROMPT BOSHI [P003]
+P003 | Birinchi migratsiyadan oldin custom User
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P002 bajarilgan va tekshirilgan.
+Stack: Django auth, AbstractUser, ORM.
+Yangi dependency/qism: accounts app; qo‘shimcha tashqi paket yo‘q.
+Avval tushuntir: AbstractUser; AUTH_USER_MODEL; role bilan is_staff/is_superuser farqi; password
+hash.
+Faqat shu ishlarni bajar:
+  1) accounts.User: role faqat pupil/teacher, must_change_password, preferred_language; username
+    unique. Foydali standart auth maydonlarini qayta ixtiro qilma. Role uchun kerakli DB CHECKni ham
+    qo‘sh.
+  2) AUTH_USER_MODEL va boshlang‘ich migrationni yoz. Migration tarixi mavjud bo‘lsa avval xavfsiz
+    moslashuvni tekshir, DBni reset qilma.
+  3) Texnik superuser biznesdagi uchinchi rol emasligini docsda yoz.
+Scope cheklovi: Login API, profil CRUD, akademik model yoki ommaviy registration qurma.
+Qabul mezoni/tekshiruv:
+  - Migration faylida custom User ishlatilishi ko‘rilsin.
+  - Password fieldga raw qiymat saqlanmasin; create_user/set_password yo‘li aniq bo‘lsin.
+Rasmiy manbalar:
+  [R02] Custom User: https://docs.djangoproject.com/en/5.2/topics/auth/customizing/
+  [R35] Django password boshqaruvi: https://docs.djangoproject.com/en/5.2/topics/auth/passwords/
+Natijani P000 formatida ber, progressga P003ni yoz va to‘xta.
+PROMPT OXIRI [P003]
+
+PROMPT BOSHI [P004]
+P004 | PostgreSQL bilan birinchi migrate
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P003 bajarilgan va tekshirilgan.
+Stack: Docker Compose, PostgreSQL, Django, psycopg.
+Yangi dependency/qism: PostgreSQL xizmati va psycopg; mavjud bo‘lsa qayta o‘rnatma.
+Avval tushuntir: Container/image/volume; service hostname va localhost; migration DBga nima qiladi.
+Faqat shu ishlarni bajar:
+  1) Compose’da postgres va uning persistent named volume/healthcheckini sozla. Backend container
+    bo‘lsa DB host postgres; hostdan ishlasa boshqa host konfiguratsiyasini tushuntir.
+  2) Env orqali DBni ulab, custom User tayyorligini tekshirgan holda migrate qil. .env.examplega
+    faqat namuna qo‘sh.
+  3) Lokal ishga tushirish va to‘xtatish komandalarini READMEga yoz. Data volume’ni o‘chirish bu
+    jarayonning bir qismi emas.
+Scope cheklovi: Redis, Celery, Nginx, production hosting yoki biznes API qurma.
+Qabul mezoni/tekshiruv:
+  - DB connection va migrate muvaffaqiyati tekshirilsin.
+  - Container qayta ishga tushganda oldingi yozuv saqlanishi ko‘rsatilsin.
+Rasmiy manbalar:
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+  [R30] Docker Compose: https://docs.docker.com/compose/
+Natijani P000 formatida ber, progressga P004ni yoz va to‘xta.
+PROMPT OXIRI [P004]
+
+PROMPT BOSHI [P005]
+P005 | Request/Response bilan bitta o‘quv endpointi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P004 bajarilgan va tekshirilgan.
+Stack: Django, DRF, HTTP/JSON.
+Yangi dependency/qism: djangorestframework.
+Avval tushuntir: request.data/query_params; serializerdan oldingi oddiy JSON; Response va status;
+APIView nima qiladi.
+Faqat shu ishlarni bajar:
+  1) Global permission IsAuthenticated bo‘lsin. /api/v1/demo/learning-goal/ uchun lokal-only APIView
+    yoz: GET sarlavha/maqsad qaytarsin; POST kichik inputni tekshirsin.
+  2) Oddiy input Serializerda title/goal required. JSON format xatosi, noto‘g‘ri body va ruxsatsiz
+    methodni ko‘rsat.
+  3) Demo URL faqat aniq development flag bilan mavjud; haqiqiy school ma’lumoti ishlatilmasin.
+Scope cheklovi: Course CRUD, login, fayl, dashboard yoki HTML/React UI yozma.
+Qabul mezoni/tekshiruv:
+  - To‘g‘ri JSON javobi va noto‘g‘ri input uchun 400 tekshirilsin.
+  - Production settingsda demo URL mavjud bo‘lmasin.
+Rasmiy manbalar:
+  [R03] DRF Request: https://www.django-rest-framework.org/api-guide/requests/
+  [R04] DRF Response/status: https://www.django-rest-framework.org/api-guide/responses/
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+Natijani P000 formatida ber, progressga P005ni yoz va to‘xta.
+PROMPT OXIRI [P005]
+
+PROMPT BOSHI [P006]
+P006 | Test va OpenAPI boshlang‘ich asosi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P005 bajarilgan va tekshirilgan.
+Stack: pytest, pytest-django, DRF APIClient, drf-spectacular.
+Yangi dependency/qism: pytest-django va drf-spectacular; dev dependencylarni ajrat.
+Avval tushuntir: Fixture; arrange-act-assert; OpenAPI va API contract; schema runtime logika emas.
+Faqat shu ishlarni bajar:
+  1) Django/DRF uchun test config va kichik fixture yarat; mavjud test framework bo‘lsa uni saqla.
+  2) P005 endpointiga mazmunli 2-3 test yoz. /api/schema/ va /api/docs/ dev-only yoki ruxsatli
+    bo‘lsin.
+  3) Schema generation va target test komandalarini bajargin; READMEga curl misoli yoz.
+Scope cheklovi: CI/CD, butun LMS testlari, frontend yoki custom error frameworkni hozir qurma.
+Qabul mezoni/tekshiruv:
+  - Ilk testlar o‘tsin; tekshiruvni bajara olmasang sababini yoz.
+  - Schema generatsiya bo‘lsin; bu bosqich biznes funksiyasi qo‘shmasin.
+Rasmiy manbalar:
+  [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
+  [R24] OpenAPI/drf-spectacular: https://drf-spectacular.readthedocs.io/en/latest/readme.html
+  [R32] pytest-django: https://pytest-django.readthedocs.io/en/latest/
+Natijani P000 formatida ber, progressga P006ni yoz va to‘xta.
+PROMPT OXIRI [P006]
+
+==============================================================================
+02-DARS: AKADEMIK MA’LUMOTLAR VA FAN API
+==============================================================================
+
+PROMPT BOSHI [P007]
+P007 | AcademicYear va Term modellari
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P006 bajarilgan va tekshirilgan.
+Stack: Django ORM, PostgreSQL, migrations, pytest.
+Yangi dependency/qism: academics app.
+Avval tushuntir: FK; yil/chorak; DB CHECK bilan service validation farqi.
+Faqat shu ishlarni bajar:
+  1) AcademicYear(start/end,label,status), Term(year,order,start/end,status) qo‘sh.
+  2) Sana tartibi va unique(year,order) cheklovlarini yoz; Term sanalari yil ichida bo‘lishini
+    service/validation bilan tekshir.
+  3) Akademik yil va chorakni yopish faqat status uchun tayanch; to‘liq yopish workflow’ini hali
+    qurma.
+Scope cheklovi: Sinf, course, API CRUD yoki chorak bahosi qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Teskari sana va takror chorak tartibi rad.
+  - Boshqa yil chegarasidagi term validatsiyada rad.
+Rasmiy manbalar:
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+  [R33] Django constraint API: https://docs.djangoproject.com/en/5.2/ref/models/constraints/
+Natijani P000 formatida ber, progressga P007ni yoz va to‘xta.
+PROMPT OXIRI [P007]
+
+PROMPT BOSHI [P008]
+P008 | Sinf, fan katalogi va CourseOffering
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P007 bajarilgan va tekshirilgan.
+Stack: Django ORM, PostgreSQL.
+Yangi dependency/qism: SchoolClass, Subject, CourseOffering modellarining migratsiyasi.
+Avval tushuntir: Subject vs CourseOffering; unique_together o‘rnidagi UniqueConstraint; PROTECT va
+history.
+Faqat shu ishlarni bajar:
+  1) SchoolClass(year,grade_level,section), Subject(code,title),
+    CourseOffering(class,subject,archived_at) yarat.
+  2) Sinf 1..11, unique(year,grade,section), unique(class,subject); tarixiy entitylar uchun xavfsiz
+    FK delete siyosati.
+  3) 7-A Matematika va 7-B Matematika misolida aloqani izohla.
+Scope cheklovi: Teacher/pupil biriktirish, jadval, kontent yoki API yozma.
+Qabul mezoni/tekshiruv:
+  - Bir sinfda bitta fan course’i takrorlanmasin.
+  - Bitta Subject ikki sinfdagi ikki offeringga tegishli bo‘la olsin.
+Rasmiy manbalar:
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+  [R33] Django constraint API: https://docs.djangoproject.com/en/5.2/ref/models/constraints/
+Natijani P000 formatida ber, progressga P008ni yoz va to‘xta.
+PROMPT OXIRI [P008]
+
+PROMPT BOSHI [P009]
+P009 | Teacherning coursega biriktirilishi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P008 bajarilgan va tekshirilgan.
+Stack: Django ORM, PostgreSQL, service validation.
+Yangi dependency/qism: TeachingAssignment modeli.
+Avval tushuntir: Role - kim; assignment - qayerda; vaqt oralig‘i va tarix.
+Faqat shu ishlarni bajar:
+  1) TeachingAssignment(course,teacher,start/end,can_grade) va date-validatsiya qo‘sh.
+  2) Faqat role=teacher biriktirilsin; inactive teacher va arxiv course uchun write qoidalarini
+    belgila.
+  3) Teacher almashishi eski assignmentni o‘chirmasdan intervalni yopish bilan ifodalansin.
+Scope cheklovi: Login, operator permission, course CRUD yoki grade model yozma.
+Qabul mezoni/tekshiruv:
+  - Pupilni teacher sifatida biriktirish rad.
+  - Oldingi teacher assignment tarixi saqlansin.
+Rasmiy manbalar:
+  [R02] Custom User: https://docs.djangoproject.com/en/5.2/topics/auth/customizing/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P009ni yoz va to‘xta.
+PROMPT OXIRI [P009]
+
+PROMPT BOSHI [P010]
+P010 | Pupil membership va Enrollment
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P009 bajarilgan va tekshirilgan.
+Stack: Django ORM, PostgreSQL, transaction.
+Yangi dependency/qism: ClassMembership va Enrollment.
+Avval tushuntir: Sinf membershipi vs fan enrollmenti; active/read-history; atomic yangilash.
+Faqat shu ishlarni bajar:
+  1) ClassMembership va Enrollmentni sanalar/status bilan yarat. Pupil+course uniqueness va bitta
+    faol asosiy sinf qoidasi bo‘lsin.
+  2) Bitta pupilni mavjud sinfga biriktiradigan tor service yoz: membership va shu sinf kurslari
+    enrollmentlari atomic yaratiladi.
+  3) Sinf almashganda eski enrollment yopiladi, tarix qoladi. Orqaga sana bilan murakkab overlapni
+    alohida cheklab yoki tekshirib aniq hujjatlashtir.
+Scope cheklovi: Bulk import UI/API, ko‘p maktab tenancy yoki yillik avtomatik ko‘chirish qurma.
+Qabul mezoni/tekshiruv:
+  - Teacher pupil enrollmentiga kiritilmasin; ikki faol asosiy sinf rad.
+  - Eski enrollment yopilgach history yo‘qolmasin.
+Rasmiy manbalar:
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P010ni yoz va to‘xta.
+PROMPT OXIRI [P010]
+
+PROMPT BOSHI [P011]
+P011 | Takror ishlaydigan synthetic seed
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P010 bajarilgan va tekshirilgan.
+Stack: Django management command, ORM, test fixtures.
+Yangi dependency/qism: Yangi paket yo‘q.
+Avval tushuntir: Management command; idempotent seed; sun’iy ma’lumot va real data farqi.
+Faqat shu ishlarni bajar:
+  1) seed_school dev command: bitta yil, choraklar, 7-A/7-B, 2 teacher, 4 pupil, fanlar va
+    biriktirishlar.
+  2) Faqat development/test muhitida ishlasin; qayta ishga tushirish duplicate yaratmasin.
+  3) Dev parollarni envdan ol yoki bir martalik lokal ko‘rsat; raw parolni seed fayli/log/historyga
+    yozma. READMEda synthetic ekanini ayt.
+Scope cheklovi: Haqiqiy pupil importi, email yoki account yaratish API’sini qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Command ikki marta ishlaganda asosiy yozuvlar soni o‘zgarmasin.
+  - User paroli hash saqlansin; productionda seed rad bo‘lsin.
+Rasmiy manbalar:
+  [R02] Custom User: https://docs.djangoproject.com/en/5.2/topics/auth/customizing/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P011ni yoz va to‘xta.
+PROMPT OXIRI [P011]
+
+PROMPT BOSHI [P012]
+P012 | Fanlar ro‘yxati va detail read API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P011 bajarilgan va tekshirilgan.
+Stack: DRF ModelSerializer, ListAPIView/RetrieveAPIView, ORM.
+Yangi dependency/qism: Read serializer va course read endpointlari.
+Avval tushuntir: ModelSerializer vs model; select_related; list/detail va queryset scope.
+Faqat shu ishlarni bajar:
+  1) GET /api/v1/courses/ va /courses/{id}/ni yoz; explicit fields: fan, sinf, teacher display va
+    year.
+  2) Boshidanoq pupil uchun tegishli enrollment, teacher uchun assignment scope. Anonymous yopiq;
+    universal “authenticated hammasini ko‘radi” qoidasi bo‘lmasin.
+  3) Auth API hali yo‘q: testda force_authenticate, lokal admin sessiyasi bilan ko‘rsat. Profilning
+    ortiqcha maydonlarini chiqarmagin.
+Scope cheklovi: Create/update/delete course, login yoki topicni hozir qo‘shma.
+Qabul mezoni/tekshiruv:
+  - A pupil B course’ini list/detail orqali olmasin.
+  - Serializer password, is_staff yoki boshqa pupil profilini bermasin.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R06] Field va relations: https://www.django-rest-framework.org/api-guide/relations/
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+Natijani P000 formatida ber, progressga P012ni yoz va to‘xta.
+PROMPT OXIRI [P012]
+
+==============================================================================
+03-DARS: LOGIN, PAROL VA VAKOLAT
+==============================================================================
+
+PROMPT BOSHI [P013]
+P013 | CSRF va session login
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P012 bajarilgan va tekshirilgan.
+Stack: Django auth/session, Django CSRF, DRF input validation.
+Yangi dependency/qism: CSRF cookie endpoint va CSRF-himoyalangan login.
+Avval tushuntir: Session cookie vs token; CSRF; nega anonim login alohida himoyalanadi.
+Faqat shu ishlarni bajar:
+  1) GET /api/v1/auth/csrf/ va POST /auth/login/ni yoz. Django ensure_csrf_cookie/csrf_protect va
+    authenticate/login ishlat.
+  2) Login input serializer, username/passwordni oshkor qilmaydigan generic error; session rotate
+    bo‘lsin.
+  3) curl cookie jar yoki HTTP client bilan ketma-ket CSRF > login misolini ber. Token/JWT qo‘shma.
+Scope cheklovi: Registration, password reset, JWT, OAuth yoki frontend login yozma.
+Qabul mezoni/tekshiruv:
+  - CSRFsiz login rad, valid CSRF bilan session yaralsin.
+  - Xato login username mavjudligini aytmasin; secret logga chiqmasin.
+Rasmiy manbalar:
+  [R09] Authentication: https://www.django-rest-framework.org/api-guide/authentication/
+  [R11] Django CSRF: https://docs.djangoproject.com/en/5.2/howto/csrf/
+Natijani P000 formatida ber, progressga P013ni yoz va to‘xta.
+PROMPT OXIRI [P013]
+
+PROMPT BOSHI [P014]
+P014 | Logout va current-user profili
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P013 bajarilgan va tekshirilgan.
+Stack: Django logout, DRF RetrieveUpdateAPIView, SessionAuthentication.
+Yangi dependency/qism: /me/ va logout endpointlari.
+Avval tushuntir: Current-user resource; read_only/writeable fields; logout CSRF.
+Faqat shu ishlarni bajar:
+  1) POST /auth/logout/ va GET/PATCH /me/ni yoz; faqat current user.
+  2) Profil PATCH faqat ism/til kabi ruxsatli maydonlar. role, is_staff, username yoki enrollmentni
+    o‘zgartirishni qabul qilma.
+  3) Logout sessiyani bekor qilsin; keyingi private GET yopilsin.
+Scope cheklovi: Pupil list, boshqa user profili, reset yoki operator API yozma.
+Qabul mezoni/tekshiruv:
+  - Pupil PATCH orqali teacher yoki staff bo‘la olmasin.
+  - Logout’dan keyin eski session bilan coursega kirish rad.
+Rasmiy manbalar:
+  [R09] Authentication: https://www.django-rest-framework.org/api-guide/authentication/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R11] Django CSRF: https://docs.djangoproject.com/en/5.2/howto/csrf/
+Natijani P000 formatida ber, progressga P014ni yoz va to‘xta.
+PROMPT OXIRI [P014]
+
+PROMPT BOSHI [P015]
+P015 | Parol almashtirish va birinchi kirish cheklovi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P014 bajarilgan va tekshirilgan.
+Stack: Django password validators, DRF GenericAPIView/Serializer.
+Yangi dependency/qism: /me/change-password/ va tor must-change permission.
+Avval tushuntir: check_password/set_password; eski sessiyalar; must-change server gate.
+Faqat shu ishlarni bajar:
+  1) POST /me/change-password/: current_password va new_password validatsiyasi, set_password,
+    must_change_password=False.
+  2) Must-change holatda auth/me/password-change/logoutdan boshqa biznes APIlar yopiq; URLni
+    to‘g‘ridan-to‘g‘ri chaqirish ham rad.
+  3) Parol almashgach sessiyalar siyosatini aniq qil; joriy sessiyani saqlasang Django
+    update_session_auth_hash, boshqa eski sessiyalar bekor bo‘lsin.
+Scope cheklovi: Email orqali forgot-password, JWT yoki registration qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Noto‘g‘ri eski parol va zaif yangi parol rad.
+  - Must-change gate yoqilsa course API ham yopiq; muvaffaqiyatdan keyin ochiq.
+Rasmiy manbalar:
+  [R09] Authentication: https://www.django-rest-framework.org/api-guide/authentication/
+  [R35] Django password boshqaruvi: https://docs.djangoproject.com/en/5.2/topics/auth/passwords/
+Natijani P000 formatida ber, progressga P015ni yoz va to‘xta.
+PROMPT OXIRI [P015]
+
+PROMPT BOSHI [P016]
+P016 | Course scope va object permissionni bir joyga jamlash
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P015 bajarilgan va tekshirilgan.
+Stack: DRF BasePermission, queryset selectors, ORM.
+Yangi dependency/qism: IsCourseTeacher va scope helperlar.
+Avval tushuntir: List filtering vs has_object_permission; parent FK injection; read-history vs
+write-active.
+Faqat shu ishlarni bajar:
+  1) Mavjud scope kodini kichik reusable selector/permissionlarga jamla; keraksiz refactor qilma.
+  2) Pupil tarixiy o‘z natijasini o‘qishi, faqat faol enrollment bilan yangi write qilishi; teacher
+    assignment va can_grade mezoni.
+  3) Hozirgi course endpointlariga tatbiq qil; yangi modul qurmasdan permission matrix testlari yoz.
+Scope cheklovi: Yangi role, global teacher access, permission framework yoki UI yozma.
+Qabul mezoni/tekshiruv:
+  - 2 pupil/2 teacher list/detail ID-almashtirish testlari o‘tsin.
+  - Closed assignment/enrollment writega ruxsat bermasin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R27] BOLA/obyekt ruxsati:
+    https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/
+Natijani P000 formatida ber, progressga P016ni yoz va to‘xta.
+PROMPT OXIRI [P016]
+
+PROMPT BOSHI [P017]
+P017 | Operator teacher capabilitylari
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P016 bajarilgan va tekshirilgan.
+Stack: Django permissions, management command, auth.
+Yangi dependency/qism: manage_accounts va manage_academics capability.
+Avval tushuntir: Role vs capability; least privilege; superuser va operator teacher farqi.
+Faqat shu ishlarni bajar:
+  1) Custom permissionlar va texnik operator ishlatadigan bootstrap_teacher command yoz.
+  2) Command mavjud teacherga aniq capability bersin; pupilga berishni rad etsin. Actor/target/sabab
+    audit yozuviga tayanch bo‘lsin.
+  3) Qayta ishlaganda duplicate bo‘lmasin. Auditoria seed’dan tashqari maxfiy parol
+    yaratish/tarqatishni hozir qilma.
+Scope cheklovi: Uchinchi admin biznes roli, hamma teacherga umumiy vakolat yoki Django admin
+frontendini qurma.
+Qabul mezoni/tekshiruv:
+  - Oddiy teacher manage_accounts olmaydi; pupilga grant rad.
+  - Foydalanuvchi profil PATCHi orqali capability qo‘shib bo‘lmaydi.
+Rasmiy manbalar:
+  [R02] Custom User: https://docs.djangoproject.com/en/5.2/topics/auth/customizing/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+Natijani P000 formatida ber, progressga P017ni yoz va to‘xta.
+PROMPT OXIRI [P017]
+
+PROMPT BOSHI [P018]
+P018 | Hisob berish va nazoratli reset API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P017 bajarilgan va tekshirilgan.
+Stack: DRF CreateAPIView/action, Django auth permissions, password validators.
+Yangi dependency/qism: Operator teacher uchun hisob lifecycle API.
+Avval tushuntir: Provisioning vs public signup; one-time password; audit va session invalidation.
+Faqat shu ishlarni bajar:
+  1) manage_accounts bilan POST /accounts/ hisob yaratish va POST /accounts/{id}/reset-password/
+    amallarini tor serializerlarda yoz.
+  2) Pupil/teacher loginini maxsus yarat; vaqtinchalik parol faqat bir martalik xavfsiz response,
+    hash saqlash, must_change flag. Request bodyni loglamagin.
+  3) Reset boshqa sessiyalarni bekor qilsin; userga is_staff/is_superuser yoki capability berishni
+    API qabul qilmasin. Enrollment alohida jarayon.
+Scope cheklovi: Ommaviy registration, email recovery, bulk import yoki privilege grant API qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Oddiy teacher/pupil accounts APIga kira olmasin.
+  - Resetdan keyin eski parol/session ishlamasin va must-change yoqilsin.
+Rasmiy manbalar:
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R11] Django CSRF: https://docs.djangoproject.com/en/5.2/howto/csrf/
+  [R35] Django password boshqaruvi: https://docs.djangoproject.com/en/5.2/topics/auth/passwords/
+Natijani P000 formatida ber, progressga P018ni yoz va to‘xta.
+PROMPT OXIRI [P018]
+
+==============================================================================
+04-DARS: KURS VA MAVZU BOSHQARUVI
+==============================================================================
+
+PROMPT BOSHI [P019]
+P019 | Topic modeli va read API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P018 bajarilgan va tekshirilgan.
+Stack: Django ORM, DRF read serializer, ReadOnlyModelViewSet.
+Yangi dependency/qism: learning app va Topic.
+Avval tushuntir: Topic vs course; draft/published; router va read-only ViewSet.
+Faqat shu ishlarni bajar:
+  1) Topic(course,term,title,objective,order,state,published_at) yarat; term course yiliga mos
+    bo‘lsin.
+  2) GET courses/{id}/topics/ va topics/{id}/: teacher o‘z draftini, pupil o‘z published mavzusini
+    ko‘radi.
+  3) Unique(course,term,order) va parent scope tekshiruvini qo‘sh.
+Scope cheklovi: Mavzu yaratish/tahrirlash, resource yoki publish action qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Pupil draftni detail ID orqali ham olmasin.
+  - Boshqa yil termi va begona course rad.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R08] ViewSet/router: https://www.django-rest-framework.org/api-guide/viewsets/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+Natijani P000 formatida ber, progressga P019ni yoz va to‘xta.
+PROMPT OXIRI [P019]
+
+PROMPT BOSHI [P020]
+P020 | Teacherning bitta draft mavzu yaratishi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P019 bajarilgan va tekshirilgan.
+Stack: DRF CreateModelMixin, Serializer, mavjud Topic ViewSet.
+Yangi dependency/qism: Faqat create action.
+Avval tushuntir: Mixin tayyor xulqi; perform_create; request.user va writable FK.
+Faqat shu ishlarni bajar:
+  1) POST /topics/ uchun create action qo‘sh; title/objective/term/order/course input.
+  2) Course faqat assigned teacher scope’dan tanlansin. Server state=draft qiladi; client
+    published_at yoki teacher yubora olmasin.
+  3) Oddiy yaratish uchun tayyor mixindan foydalan; ortiqcha service/repository qatlami yaratma.
+Scope cheklovi: Update, delete, publish yoki yangi course yaratma.
+Qabul mezoni/tekshiruv:
+  - O‘z course’iga draft 201; pupil yoki begona course 403/404.
+  - Bodydagi state=published orqali nashr qilish imkonsiz.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R08] ViewSet/router: https://www.django-rest-framework.org/api-guide/viewsets/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+Natijani P000 formatida ber, progressga P020ni yoz va to‘xta.
+PROMPT OXIRI [P020]
+
+PROMPT BOSHI [P021]
+P021 | Draft mavzuni tahrirlash va arxivlash
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P020 bajarilgan va tekshirilgan.
+Stack: DRF UpdateModelMixin, custom archive action, mavjud Topic.
+Yangi dependency/qism: Draft update va xavfsiz archive.
+Avval tushuntir: PATCH vs PUT; immutable published content; delete vs archive.
+Faqat shu ishlarni bajar:
+  1) PATCH /topics/{id}/ faqat draft maydonlarini o‘zgartirsin; client parent courseni ko‘chirib
+    yubora olmasin.
+  2) Archive action yoz; FK history o‘chmasin, pupil aktiv ro‘yxatidan chiqsin. Published
+    maqsad/shartni izsiz overwrite qilma.
+  3) Destroy actionni ochma; arxivda eski baho/ishlar tarixini saqlash siyosatini yoz.
+Scope cheklovi: Publish, topic reorder batch, kontent versiya tizimi yoki resurs qurma.
+Qabul mezoni/tekshiruv:
+  - Begona teacher tahriri rad; published contentga oddiy PATCH rad.
+  - Archive DB qatorini o‘chirmasin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R08] ViewSet/router: https://www.django-rest-framework.org/api-guide/viewsets/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+Natijani P000 formatida ber, progressga P021ni yoz va to‘xta.
+PROMPT OXIRI [P021]
+
+PROMPT BOSHI [P022]
+P022 | Mavzuni nashr qilish actioni
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P021 bajarilgan va tekshirilgan.
+Stack: DRF @action, Django transaction, Topic.
+Yangi dependency/qism: publish_topic service.
+Avval tushuntir: CRUD bilan biznes buyruq farqi; idempotent publish; published_at.
+Faqat shu ishlarni bajar:
+  1) POST /topics/{id}/publish/ action va tor service yoz.
+  2) Assigned teacher, draft holati, objective/title va mos term tekshirilsin; state/published_at
+    birga yozilsin.
+  3) Takror publish ayni natijani qaytarsin; pupil ro‘yxatida mavzu ochilsin.
+Scope cheklovi: Notification, Celery, resurs avtomatik publish yoki AI yaratma.
+Qabul mezoni/tekshiruv:
+  - Bo‘sh objective bilan publish rad.
+  - Ikki publish duplicate qilmasin; begona teacher rad.
+Rasmiy manbalar:
+  [R08] ViewSet/router: https://www.django-rest-framework.org/api-guide/viewsets/
+  [R13] Validators: https://www.django-rest-framework.org/api-guide/validators/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P022ni yoz va to‘xta.
+PROMPT OXIRI [P022]
+
+PROMPT BOSHI [P023]
+P023 | Akademik tuzilmaning cheklangan boshqaruv APIlari
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P022 bajarilgan va tekshirilgan.
+Stack: DRF generics, Django permissions, mavjud academics modellar.
+Yangi dependency/qism: manage_academics bilan catalog/admin API.
+Avval tushuntir: Katalog read vs operator write; tayyor generics; himoyalangan delete.
+Faqat shu ishlarni bajar:
+  1) CourseOffering uchun operator create/update’ni yoz. Qolgan kataloglar alohida P023-A...F
+    promptlarida; bu promptda ularning write API’sini yozma.
+  2) CourseOffering create/update manage_academics talab qilsin; class/subject mavjud va mos
+    bo‘lsin. Class/fanni tarix bor joyda almashtirishni rad et.
+  3) Frontendga tanlash uchun scoped class/subject read endpointlarini qo‘sh. Boshqa kataloglarga
+    yangi write endpoint yozma.
+Scope cheklovi: Barcha kataloglar uchun birdan to‘liq CRUD, bulk import, membership API yoki UI
+yozma.
+Qabul mezoni/tekshiruv:
+  - Oddiy teacher course yarata olmasin; operator yaratsin.
+  - Ishi/bahosi mavjud course parentlarini o‘zgartirish rad.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P023ni yoz va to‘xta.
+PROMPT OXIRI [P023]
+
+PROMPT BOSHI [P023-A]
+P023-A | AcademicYear/Term boshqaruv API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P023 bajarilgan va tekshirilgan.
+Stack: DRF generics, manage_academics, existing AcademicYear/Term.
+Yangi dependency/qism: Bitta yil-chorak aggregate uchun write API.
+Avval tushuntir: Catalog aggregate; operator write; tarixni saqlab archive/close.
+Faqat shu ishlarni bajar:
+  1) Mavjud yil/chorak modellariga operator teacher list/create/update API yoz. Oddiy teacher/pupil
+    uchun zarur read-only ko‘rinish.
+  2) Term shu year ichida, order unique. Referenced yil/chorakni delete emas archive; yopish
+    published baholarni o‘chirmasin.
+  3) Yopiq termga yangi topic/vazifa/grade write siyosatini shared service/permissionda tekshir;
+    ehtiyoj bo‘lsa keyingi modullarga shu helperni ulash talabi yoz.
+Scope cheklovi: Sinf, fan, membership yoki yillik promotion workflow yozma.
+Qabul mezoni/tekshiruv:
+  - Operator yaratsin; oddiy teacher write qilmasin.
+  - Referenced term delete rad; yopiq termda yangi yozuv bloklanadi.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P023-Ani yoz va to‘xta.
+PROMPT OXIRI [P023-A]
+
+PROMPT BOSHI [P023-B]
+P023-B | SchoolClass katalog API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P023-A bajarilgan va tekshirilgan.
+Stack: DRF ListCreateAPIView/RetrieveUpdateAPIView, manage_academics.
+Yangi dependency/qism: SchoolClass write API.
+Avval tushuntir: Yilga tegishli sinf; grade/section; rename vs yangi o‘quv yili.
+Faqat shu ishlarni bajar:
+  1) Class list/create/update endpoint: year/grade/section input, operator scope va unique
+    constraintga mos xato.
+  2) Eski yil 7-Ani keyingi yil 8-Aga rename qilib tarixni almashtirishga yo‘l qo‘yma.
+  3) Sinf rosteri bu promptda yozilmaydi; hozir faqat sinf katalogi.
+Scope cheklovi: Enrollment, transfer, promotion yoki Subject CRUD qurma.
+Qabul mezoni/tekshiruv:
+  - Bir yilda duplicate sinf rad.
+  - Oddiy teacher/pupil class create/update qila olmasin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P023-Bni yoz va to‘xta.
+PROMPT OXIRI [P023-B]
+
+PROMPT BOSHI [P023-C]
+P023-C | Subject katalog API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P023-B bajarilgan va tekshirilgan.
+Stack: DRF generics, manage_academics, existing Subject.
+Yangi dependency/qism: Subject list/create/update.
+Avval tushuntir: Katalog elementi vs CourseOffering; code unique; archive/protect.
+Faqat shu ishlarni bajar:
+  1) Subject code/title create/update va read list API yoz; operator write.
+  2) Referenced fanni o‘chirish o‘rniga archive/deactivate; mavjud offering tarixini saqla.
+  3) P023 CourseOffering formasi uchun shu read contractdan foydalan.
+Scope cheklovi: Course yaratish yoki barcha kataloglar uchun universal CRUD generator yozma.
+Qabul mezoni/tekshiruv:
+  - Duplicate code va ruxsatsiz write rad.
+  - Fan archive qilinsa oldingi ish/baho tarixi o‘chmasin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P023-Cni yoz va to‘xta.
+PROMPT OXIRI [P023-C]
+
+PROMPT BOSHI [P023-D]
+P023-D | Teacher assignment boshqaruv API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P023-C bajarilgan va tekshirilgan.
+Stack: DRF generics/command Serializer, manage_academics, TeachingAssignment.
+Yangi dependency/qism: Teacher-course assignment write API.
+Avval tushuntir: Operator scope vs grading scope; intervalni yopish va tarix.
+Faqat shu ishlarni bajar:
+  1) Teacher listning minimal coursega biriktirish uchun kerakli profilini read qil; to‘liq personal
+    data yo‘q.
+  2) Operator teacher teacher-course assignment yaratadi yoki end date bilan yopadi; can_grade
+    server tekshiruvi.
+  3) Teacher almashganda eski grader va published baholar tarixi o‘zgarmasin; o‘qituvchi o‘ziga
+    vakolat bera olmasin.
+Scope cheklovi: Hisob paroli, capability grant API yoki dars o‘rinbosar jadvalini yozma.
+Qabul mezoni/tekshiruv:
+  - Pupilni teacher sifatida biriktirish va self-grant oddiy teacherda rad.
+  - Interval tugagach eski teacher yangi grade/write qilmasin.
+Rasmiy manbalar:
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P023-Dni yoz va to‘xta.
+PROMPT OXIRI [P023-D]
+
+PROMPT BOSHI [P023-E]
+P023-E | Pupilni sinfga biriktirish va ko‘chirish API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P023-D bajarilgan va tekshirilgan.
+Stack: DRF command Serializer, manage_academics, P010 membership service.
+Yangi dependency/qism: Membership lifecycle endpoint.
+Avval tushuntir: Biriktirish/ko‘chirish; tarixiy enrollment; transaction.
+Faqat shu ishlarni bajar:
+  1) Operator teacher uchun pupil membership create/transfer command API yoz; P010 serviceni reuse
+    qil.
+  2) Eski membership/enrollment yopilib, yangi sinfning kurslari ochilsin; grade/submission tarixi
+    keyin ham saqlanadi.
+  3) Effective date va role checks; retroaktiv overlapni yashirin taxmin qilma.
+Scope cheklovi: Bulk CSV import, automatic year promotion yoki eski bahoni yangi coursega ko‘chirish
+yozma.
+Qabul mezoni/tekshiruv:
+  - Bir vaqtda 2 faol asosiy sinf bo‘lmasin.
+  - Ko‘chirish rollback bo‘lsa yarim membership/enrollment qolmasin.
+Rasmiy manbalar:
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P023-Eni yoz va to‘xta.
+PROMPT OXIRI [P023-E]
+
+PROMPT BOSHI [P023-F]
+P023-F | Course roster va enrollment reconciliation
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P023-E bajarilgan va tekshirilgan.
+Stack: DRF scoped list/action, ORM transaction, existing ClassMembership/Enrollment.
+Yangi dependency/qism: Roster read va operator sync.
+Avval tushuntir: Yangi course qo‘shilganda enrollment; idempotent synchronization; minimal pupil
+data.
+Faqat shu ishlarni bajar:
+  1) GET courses/{id}/pupils/ assigned teacher va operator uchun minimal roster qaytarsin; pupilga
+    butun sinf bahosi/profili yo‘q.
+  2) Operator sync action: sinfda faol membershiplar asosida yetishmagan course enrollmentlarini
+    ochsin; mavjud tarixni overwrite qilmasin.
+  3) P023da yangi CourseOffering yaratishdan keyin sync explicit yoki transaction service orqali
+    kerakligini hujjatlashtir.
+Scope cheklovi: CSV import, personal data export yoki pupil self-enroll yozma.
+Qabul mezoni/tekshiruv:
+  - Sync ikki marta duplicate yaratmasin; inactive membership qayta ochilmasin.
+  - Teacher boshqa course rosterini ko‘rmasin.
+Rasmiy manbalar:
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P023-Fni yoz va to‘xta.
+PROMPT OXIRI [P023-F]
+
+PROMPT BOSHI [P024]
+P024 | 4-dars yakuni: mavzu API regression va contract
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P023-F bajarilgan va tekshirilgan.
+Stack: pytest-django, DRF APIClient, drf-spectacular.
+Yangi dependency/qism: Yangi biznes dependency yo‘q.
+Avval tushuntir: Action response schema; permission matrix; read/write contract.
+Faqat shu ishlarni bajar:
+  1) P019-P023-F endpointlari/serializerlarini tekshir; faqat xato yoki contract yetishmovchiligini
+    tuzat.
+  2) Teacher create > patch > publish > pupil read oqimini test qil; operator va oddiy teacher
+    farqini tekshir.
+  3) OpenAPI/curl misollari va progressga barcha katalog/roster write/read chegaralarini yoz;
+    hard-delete actionlar ochilmasin.
+Scope cheklovi: Yangi feature yoki butun appni qayta refactor qilishni boshlama.
+Qabul mezoni/tekshiruv:
+  - Draft yashirinligi, parent FK va qayta publish testlari o‘tsin.
+  - Schema real responsega mos bo‘lsin.
+Rasmiy manbalar:
+  [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
+  [R24] OpenAPI/drf-spectacular: https://drf-spectacular.readthedocs.io/en/latest/readme.html
+Natijani P000 formatida ber, progressga P024ni yoz va to‘xta.
+PROMPT OXIRI [P024]
+
+==============================================================================
+05-DARS: RESURS VA YOPIQ FAYLLAR
+==============================================================================
+
+PROMPT BOSHI [P025]
+P025 | Attachment modeli va local private storage
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P024 bajarilgan va tekshirilgan.
+Stack: Django ORM, Storage API, PostgreSQL.
+Yangi dependency/qism: files app va private local storage adapter.
+Avval tushuntir: Fayl bytes vs metadata; public URL vs protected access; quarantine.
+Faqat shu ishlarni bajar:
+  1) Attachment(owner,key,original_name,size,detected_mime,scan_status) va scan status enum yarat.
+  2) Local private fayllar public MEDIA_URL orqali chiqmasin; UUID key ishlat. Storage interfeysi
+    keyin S3ga ko‘chirishga mos bo‘lsin.
+  3) Attachment hozir hech bir pupilga yuklab berilmaydi; pending_scan boshlang‘ich holat.
+Scope cheklovi: Upload API, S3, antivirus worker yoki download route yozma.
+Qabul mezoni/tekshiruv:
+  - Fayl metadata modeli migratsiyasi ishlasin.
+  - Private katalogni static/media route serve qilmasin.
+Rasmiy manbalar:
+  [R26] File xavfsizligi:
+    https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+  [R31] Private storage/django-storages: https://django-storages.readthedocs.io/en/latest/
+Natijani P000 formatida ber, progressga P025ni yoz va to‘xta.
+PROMPT OXIRI [P025]
+
+PROMPT BOSHI [P026]
+P026 | Multipart upload va kirish validatsiyasi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P025 bajarilgan va tekshirilgan.
+Stack: DRF MultiPartParser/FormParser, FileField, MIME aniqlash.
+Yangi dependency/qism: python-magic yoki muhitga mos ishonchli MIME adapteri.
+Avval tushuntir: Multipart boundary; declared MIME vs detected MIME; 413 va 400 farqi.
+Faqat shu ishlarni bajar:
+  1) POST /attachments/ endpointi: PDF/JPEG/PNG, har fayl 10 MB limit; boshqa format rad.
+  2) Owner=request.user; scan_status=pending_scan, UUID storage key. Userdan owner/status/path
+    olinmasin.
+  3) Testlarda deterministic fake scanner keyin ishlatilishi mumkin, lekin u faylni productionda
+    avtomatik clean qilmasin.
+Scope cheklovi: Download, haqiqiy antivirus, katta video upload yoki submission yozma.
+Qabul mezoni/tekshiruv:
+  - Begona owner/status injection va noto‘g‘ri fayl turi rad.
+  - Hajm limiti oshsa aniq xato; pending faylga public URL yo‘q.
+Rasmiy manbalar:
+  [R12] Parser: https://www.django-rest-framework.org/api-guide/parsers/
+  [R26] File xavfsizligi:
+    https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+Natijani P000 formatida ber, progressga P026ni yoz va to‘xta.
+PROMPT OXIRI [P026]
+
+PROMPT BOSHI [P027]
+P027 | Mavzuga PDF resurs biriktirish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P026 bajarilgan va tekshirilgan.
+Stack: Django ORM, DRF ListCreateAPIView/serializer.
+Yangi dependency/qism: Resource modeli, PDF resource API.
+Avval tushuntir: Parent permission; file ownership; scan gate; explicit fields.
+Faqat shu ishlarni bajar:
+  1) Resource(topic,kind,title,description,attachment,state,version) yarat; hozir faqat PDF turi.
+  2) Teacher o‘z mavzusiga o‘zi yuklagan clean attachmentni biriktirsin. Pending faylni biriktirish
+    rad; clean holat test fixture orqali beriladi. Draftdan publishedga o‘tish uchun tor publish
+    action qo‘sh: assigned teacher, clean fayl va published topic talab; client state bilan chetlab
+    o‘tmasin.
+  3) Pupil faqat o‘z published topicidagi published resource list/detailini olsin.
+Scope cheklovi: Video turi, download stream, AI ingestion yoki resurs tahrir tarixini qurma.
+Qabul mezoni/tekshiruv:
+  - Begona teacher/pupil fayli yoki begona topic ID rad.
+  - Draft/pending resurs pupilga ko‘rinmasin.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R06] Field va relations: https://www.django-rest-framework.org/api-guide/relations/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R26] File xavfsizligi:
+    https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+Natijani P000 formatida ber, progressga P027ni yoz va to‘xta.
+PROMPT OXIRI [P027]
+
+PROMPT BOSHI [P028]
+P028 | Video va havola turidagi resurs
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P027 bajarilgan va tekshirilgan.
+Stack: DRF URLField/validation, mavjud Resource.
+Yangi dependency/qism: Video/link input varianti; yangi video hosting yo‘q.
+Avval tushuntir: URL allowlist; one-of validation; link ochish bilan server fetch farqi.
+Faqat shu ishlarni bajar:
+  1) Resourcega video/link turi va URL maydonini qo‘sh. File turida attachment kerak, URL turida
+    link kerak; ikkalasi aralashsa rad.
+  2) HTTPS va sozlanadigan provider allowlistini tekshir; server linkni fetch qilmasin.
+  3) Description/transcript_text kabi accessibility maydoni va pupil read response qo‘sh.
+Scope cheklovi: Video download/transcode, YouTube API, URL scraping yoki RAG yozma.
+Qabul mezoni/tekshiruv:
+  - Ruxsatsiz host/scheme va aralash attachment+URL input rad.
+  - Ruxsatli video link mavjud scope qoidasi bilan qaytsin.
+Rasmiy manbalar:
+  [R06] Field va relations: https://www.django-rest-framework.org/api-guide/relations/
+  [R13] Validators: https://www.django-rest-framework.org/api-guide/validators/
+  [R26] File xavfsizligi:
+    https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+Natijani P000 formatida ber, progressga P028ni yoz va to‘xta.
+PROMPT OXIRI [P028]
+
+PROMPT BOSHI [P029]
+P029 | Private faylni ruxsat bilan yuklab olish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P028 bajarilgan va tekshirilgan.
+Stack: DRF GenericAPIView, Django FileResponse, mavjud Storage.
+Yangi dependency/qism: Attachment access selector.
+Avval tushuntir: Ownership yetarlimi; parent scope; Content-Disposition va URL muddati.
+Faqat shu ishlarni bajar:
+  1) GET /attachments/{id}/download/ protected route yoz: owner yoki ruxsatli parent
+    resource/submission orqali access. Hozir resource yo‘li bor, submission keyin ulanadi.
+  2) scan_status=clean va parent published/role scope tekshirilsin; localda FileResponse, public
+    media URL bermagin.
+  3) S3 variantini interfeysda tushuntir; real signed URLga o‘tish staging promptida.
+Scope cheklovi: Upload refactor, barcha fayllarni public qilish yoki S3 credential yaratma.
+Qabul mezoni/tekshiruv:
+  - Pupil A pupil B/teacherning begona resource fayliga kira olmasin.
+  - Pending/infected fayl hatto ownerga download berilmasin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R26] File xavfsizligi:
+    https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+  [R27] BOLA/obyekt ruxsati:
+    https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/
+Natijani P000 formatida ber, progressga P029ni yoz va to‘xta.
+PROMPT OXIRI [P029]
+
+PROMPT BOSHI [P030]
+P030 | Mavzu completion: o‘qildi belgisi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P029 bajarilgan va tekshirilgan.
+Stack: Django ORM, DRF GenericAPIView, existing course scope.
+Yangi dependency/qism: Completion modeli va idempotent upsert.
+Avval tushuntir: Completion vs mastery; PUT idempotency; unique constraint.
+Faqat shu ishlarni bajar:
+  1) PUT /topics/{id}/completion/ current pupil uchun o‘qildi belgisi yaratsin/yangilasin.
+  2) Unique(pupil,topic,kind); published topic va faol enrollment talab qil. GET topic detail
+    current-user completionni qo‘shsin.
+  3) Completion foizi bilim bahosiga teng emasligini contractda yoz.
+Scope cheklovi: Video tracking, ball, badge, leaderboard yoki outcome mastery hisoblama.
+Qabul mezoni/tekshiruv:
+  - Takror PUT bitta yozuv qoldirsin.
+  - Pupil boshqa user nomidan yoki draft topicga completion qila olmasin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P030ni yoz va to‘xta.
+PROMPT OXIRI [P030]
+
+==============================================================================
+06-DARS: UY VAZIFASI VA RUBRIC
+==============================================================================
+
+PROMPT BOSHI [P031]
+P031 | Assignment modeli va vaqt qoidasi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P030 bajarilgan va tekshirilgan.
+Stack: Django ORM, PostgreSQL, timezone.
+Yangi dependency/qism: assignments app va Assignment modeli.
+Avval tushuntir: available_at/due_at/closes_at; UTC; Decimal vs float.
+Faqat shu ishlarni bajar:
+  1) Assignment(topic,title,instructions,available_at,due_at,closes_at,max_score,max_attempts,state)
+    modelini yarat.
+  2) available<=due<=closes, max_score>0, max_attempts>0. API input keyin; hozir DB/model cheklovi.
+  3) Datetime aware/UTC contractini va local Asia/Tashkent ko‘rsatish mas’uliyatini docsga yoz.
+Scope cheklovi: Rubric, create API, submit yoki notificationni hozir yozma.
+Qabul mezoni/tekshiruv:
+  - Teskari deadline, manfiy ball va nol attempt rad.
+  - Model publishedni o‘zboshimchalik bilan ishga tushiruvchi side effect yaratmasin.
+Rasmiy manbalar:
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+  [R33] Django constraint API: https://docs.djangoproject.com/en/5.2/ref/models/constraints/
+Natijani P000 formatida ber, progressga P031ni yoz va to‘xta.
+PROMPT OXIRI [P031]
+
+PROMPT BOSHI [P032]
+P032 | RubricCriterion va Level modellari
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P031 bajarilgan va tekshirilgan.
+Stack: Django ORM, PostgreSQL, Decimal.
+Yangi dependency/qism: Criterion/Level modeli.
+Avval tushuntir: Mezon vs daraja; 6+3+1 ball; cross-row sum cheklovi.
+Faqat shu ishlarni bajar:
+  1) Assignmentga tegishli Criterion(label,max_points,position) va
+    Level(description,points,position) yarat.
+  2) Ball >=0, criterion max>0, daraja criterion chegarasida bo‘lishi; har criterionda 0 ballli
+    daraja publishda tekshirilishini yoz.
+  3) Rubric summasini cross-row DB CHECK bilan tekshirishga urinma: keyingi publish service qiladi.
+Scope cheklovi: Grade, rubric API yoki publish hisobini hali yozma.
+Qabul mezoni/tekshiruv:
+  - Takror criterion position va manfiy points rad.
+  - Level boshqa criterionning tasodifiy chegarasiga tayanmasin.
+Rasmiy manbalar:
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+  [R33] Django constraint API: https://docs.djangoproject.com/en/5.2/ref/models/constraints/
+Natijani P000 formatida ber, progressga P032ni yoz va to‘xta.
+PROMPT OXIRI [P032]
+
+PROMPT BOSHI [P033]
+P033 | Faqat draft vazifa yaratish API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P032 bajarilgan va tekshirilgan.
+Stack: DRF CreateAPIView yoki CreateModelMixin, Assignment Serializer.
+Yangi dependency/qism: Assignment create va teacher draft read.
+Avval tushuntir: Input serializer; parent topic scope; server-owned state.
+Faqat shu ishlarni bajar:
+  1) POST /assignments/ faqat vazifaning asosiy maydonlarini qabul qilsin; rubric hozir alohida
+    yoziladi.
+  2) Teacher o‘z topiciga draft yaratsin. Client state/published_at yoki teacher ID berib vakolat
+    olmasin.
+  3) Teacher o‘z draftini detaildan ko‘ra olsin; pupil uchun hali yopiq.
+Scope cheklovi: Nested rubric yaratish, publish, submit yoki list dashboardni qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Assigned teacher 201 olsin; pupil va begona topic rad.
+  - Noto‘g‘ri sanalar create inputda tushunarli 400 bersin.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R13] Validators: https://www.django-rest-framework.org/api-guide/validators/
+Natijani P000 formatida ber, progressga P033ni yoz va to‘xta.
+PROMPT OXIRI [P033]
+
+PROMPT BOSHI [P034]
+P034 | Rubricni atomar tahrirlash endpointi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P033 bajarilgan va tekshirilgan.
+Stack: DRF nested Serializer/ListSerializer, Django transaction.
+Yangi dependency/qism: PUT /assignments/{id}/rubric/.
+Avval tushuntir: Nested write semantikasi; replacement vs patch; atomic aggregate.
+Faqat shu ishlarni bajar:
+  1) Faqat draft Assignment uchun rubric replacement endpoint yoz: criterion va levellar bir input.
+  2) Child IDs assignmentga tegishli bo‘lsin; bir qator xato bo‘lsa butun yozuv rollback. Qaysi
+    child o‘chishi/tiklanishini aniq belgilagin.
+  3) Nested write xulqini qo‘lda aniq yoz; published rubric o‘zgarmasin.
+Scope cheklovi: Grade, rubric template katalogi, publish yoki boshqa assignmentni clone qilish
+yozma.
+Qabul mezoni/tekshiruv:
+  - Begona criterion ID va level limitidan oshish rad.
+  - Bir noto‘g‘ri child kelsa yarim rubric qolmasin.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R06] Field va relations: https://www.django-rest-framework.org/api-guide/relations/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P034ni yoz va to‘xta.
+PROMPT OXIRI [P034]
+
+PROMPT BOSHI [P035]
+P035 | Vazifani publish qilish va rubricni qulflash
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P034 bajarilgan va tekshirilgan.
+Stack: DRF @action, service, PostgreSQL transaction.
+Yangi dependency/qism: publish_assignment service.
+Avval tushuntir: Aggregate invariants; publish validation; immutable rubric.
+Faqat shu ishlarni bajar:
+  1) POST /assignments/{id}/publish/: rubric summasi max_scorega teng, barcha criterionda 0 level,
+    deadline/title/shart to‘liq.
+  2) Assignmentni lock qilib state/published_at/rubric_versionni saqla. Publishdan keyin
+    shart/ball/rubricni oddiy PATCH yopadi.
+  3) Takror publish idempotent bo‘lsin; notification hali keyingi modulda ulanadi.
+Scope cheklovi: Qayta versiyalash, deadline override, Celery yoki grade yaratma.
+Qabul mezoni/tekshiruv:
+  - 6+3+2 rubric 10 ballli vazifada rad, 6+3+1 qabul.
+  - Publishdan so‘ng criterion tahriri rad; duplicate publish yozuv qo‘shmasin.
+Rasmiy manbalar:
+  [R08] ViewSet/router: https://www.django-rest-framework.org/api-guide/viewsets/
+  [R13] Validators: https://www.django-rest-framework.org/api-guide/validators/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P035ni yoz va to‘xta.
+PROMPT OXIRI [P035]
+
+PROMPT BOSHI [P036]
+P036 | Pupil vazifa list/detail va vaqt holati
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P035 bajarilgan va tekshirilgan.
+Stack: DRF ListAPIView/RetrieveAPIView, scoped serializer.
+Yangi dependency/qism: Pupil assignment read contract.
+Avval tushuntir: Computed read fields; can_submit maslahat, server write tekshiruvi esa majburiy.
+Faqat shu ishlarni bajar:
+  1) GET /assignments/?course= va /assignments/{id}/: shart, rubric, due/closes, max_score,
+    availability status.
+  2) Pupil enrollment/published scope; available_atgacha vazifa metadata ko‘rinishi siyosatini aniq
+    yoz, topshirish yopiq.
+  3) Clock helper ishlat; due teng bo‘lsa on_time, closes teng bo‘lsa hali qabul, undan keyin yopiq
+    bo‘lishi kelajak submit bilan mos.
+Scope cheklovi: Fayl topshirish, grade yoki automatic late penaltyni qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Boshqa pupil/course draft assignmentini olmasin.
+  - Vaqt chegaralarida status/can_submit to‘g‘ri.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+Natijani P000 formatida ber, progressga P036ni yoz va to‘xta.
+PROMPT OXIRI [P036]
+
+==============================================================================
+07-DARS: DRAFT VA YAKUNIY TOPSHIRISH
+==============================================================================
+
+PROMPT BOSHI [P037]
+P037 | Submission konteyneri va draft matni
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P036 bajarilgan va tekshirilgan.
+Stack: Django ORM, DRF GenericAPIView, version field.
+Yangi dependency/qism: Submission va SubmissionRevision skeleti.
+Avval tushuntir: Draft vs submitted revision; optimistic concurrency; unique(assignment,pupil).
+Faqat shu ishlarni bajar:
+  1) Submission konteyneri va immutable revisionga tayanch model yarat; hozir faqat draft matnni
+    saqlash.
+  2) GET/PUT assignments/{id}/my-draft/: current pupil, faol enrollment; draft_version bilan
+    yo‘qolgan tahrirni rad.
+  3) Server pupilni request.userdan olsin; submitted revision hozir yaratilmasin.
+Scope cheklovi: Fayl bog‘lash, final submit, grade yoki return yozma.
+Qabul mezoni/tekshiruv:
+  - Takror draft PUT bir konteynerni yangilasin.
+  - Stale version rad; begona pupil nomidan draft yozilmasin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P037ni yoz va to‘xta.
+PROMPT OXIRI [P037]
+
+PROMPT BOSHI [P038]
+P038 | Draftga clean fayl biriktirish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P037 bajarilgan va tekshirilgan.
+Stack: Mavjud Attachment, Submission, DRF relation validation.
+Yangi dependency/qism: Submission attachment relation.
+Avval tushuntir: Owned attachment; clean scan; parent download policy.
+Faqat shu ishlarni bajar:
+  1) my-draft inputiga attachment_ids qo‘sh: maksimum 3, owned va clean fayllar.
+  2) Draft relation update atomic; boshqa draft/revisionga bog‘langan faylni qayta ishlatish
+    siyosatini aniq chekla.
+  3) P029 download selectorini endi pupil o‘z ishi va assigned teacher review accessi bilan
+    kengaytir; teacher draft ishni hali ko‘rmasin.
+Scope cheklovi: Final submit, yangi uploader, antivirus yoki grade yo‘q.
+Qabul mezoni/tekshiruv:
+  - Begona/pending fayl va 4 ta fayl rad.
+  - Draftni teacher ko‘rmasin; pupil o‘z clean draft faylini olsin.
+Rasmiy manbalar:
+  [R06] Field va relations: https://www.django-rest-framework.org/api-guide/relations/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R26] File xavfsizligi:
+    https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+Natijani P000 formatida ber, progressga P038ni yoz va to‘xta.
+PROMPT OXIRI [P038]
+
+PROMPT BOSHI [P039]
+P039 | Final submit: bitta revisionni freeze qilish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P038 bajarilgan va tekshirilgan.
+Stack: DRF command serializer, Django atomic/select_for_update, clock.
+Yangi dependency/qism: submit_work service.
+Avval tushuntir: Holatlar o‘tishi; deadline serverda; transaction va row lock.
+Faqat shu ishlarni bajar:
+  1) POST assignments/{id}/submit/ draft_version olsin; scope, vaqt, max_attempts va bo‘sh ishni
+    tekshir.
+  2) Submission+Assignment kerakli qatorlarini barqaror tartibda lock qil; draft text/fayllarni
+    immutable revisionga snapshot qil.
+  3) submitted_at/is_late serverdan; receipt qaytar. Hozir retry takrorini status/lock bilan
+    to‘xtat, persistent key keyingi promptda.
+Scope cheklovi: Persistent idempotency registry, return/resubmit, baho yoki notificationni qo‘shma.
+Qabul mezoni/tekshiruv:
+  - due/closes chegara qiymatlari va late flag test.
+  - Submitted text/fayl revisionini keyingi draft o‘zgartira olmasin.
+Rasmiy manbalar:
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+Natijani P000 formatida ber, progressga P039ni yoz va to‘xta.
+PROMPT OXIRI [P039]
+
+PROMPT BOSHI [P040]
+P040 | Submit uchun persistent idempotency key
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P039 bajarilgan va tekshirilgan.
+Stack: PostgreSQL unique constraint, hashlib/payload fingerprint, existing submit.
+Yangi dependency/qism: DB-backed idempotency receipt.
+Avval tushuntir: Network retry vs yangi urinish; key scope; key+payload mismatch.
+Faqat shu ishlarni bajar:
+  1) Submitga Idempotency-Key talab qil; actor+assignment+key unique, input fingerprint va oldingi
+    response saqlansin.
+  2) Shu key+shu input oldingi receiptni qaytarsin, boshqa input 409. Duplicate start holatida DB
+    constraint va qayta o‘qish bilan bir natija.
+  3) Oldin muvaffaqiyatli keyni deadline o‘tgandan keyin replay qilish ham oldingi receipt
+    qaytarsin; yangi submitga aylanmasin.
+Scope cheklovi: Umumiy barcha endpointlar uchun katta idempotency framework, Redis lock yoki return
+yozma.
+Qabul mezoni/tekshiruv:
+  - Bir key ikki requestda bitta revision; mismatch 409.
+  - Redis o‘chirilishi natijani o‘zgartirmasin; key DBda.
+Rasmiy manbalar:
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+Natijani P000 formatida ber, progressga P040ni yoz va to‘xta.
+PROMPT OXIRI [P040]
+
+PROMPT BOSHI [P041]
+P041 | Teacher return va yangi revision bilan qayta topshirish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P040 bajarilgan va tekshirilgan.
+Stack: DRF action, existing Submission/Revision, transaction.
+Yangi dependency/qism: return_work service.
+Avval tushuntir: Return vs delete; revision history; max_attempts.
+Faqat shu ishlarni bajar:
+  1) Teacher POST submissions/{id}/return/ sabab yozadi; faqat assigned teacher, submitted ish.
+  2) Pupilga keyingi draft ochilsin; P039 submit service yangi revision raqami yaratsin, oldingi
+    revision o‘zgarmasin.
+  3) Deadline/max_attempts hozir ham ishlasin. Individual extension keyingi roadmap, returnning o‘zi
+    muddatni uzaytirmaydi.
+Scope cheklovi: Baho, maxsus deadline API, eski revisionni overwrite yoki grade auto-copy yozma.
+Qabul mezoni/tekshiruv:
+  - Revision 1 saqlanib, qayta submit revision 2 bo‘lsin.
+  - Teacher B return qila olmasin; closes’dan keyin extension bo‘lmasa submit rad.
+Rasmiy manbalar:
+  [R08] ViewSet/router: https://www.django-rest-framework.org/api-guide/viewsets/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P041ni yoz va to‘xta.
+PROMPT OXIRI [P041]
+
+PROMPT BOSHI [P042]
+P042 | Submit concurrency va dars yakuni tekshiruvi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P041 bajarilgan va tekshirilgan.
+Stack: pytest-django transaction tests, PostgreSQL, alohida connectionlar.
+Yangi dependency/qism: Faqat sinov va zarur bugfix.
+Avval tushuntir: Sequential vs concurrent test; lock bo‘lmagan rowni yaratish race’i.
+Faqat shu ishlarni bajar:
+  1) P037-P041 uchun boundary/regression testlarni jamla; real PostgreSQLda ikki parallel submitni
+    sinovdan o‘tkaz.
+  2) Birinchi Submission yo‘q paytdagi concurrent create race’ini tekshir: unique+safe
+    get-or-create/lock strategiyasi.
+  3) Schema/curl receipt va statuslarni yakunla; faqat aniqlangan xatolarni tuzat.
+Scope cheklovi: Yangi biznes funksiyasi, fake SQLite concurrency testi yoki frontend yozma.
+Qabul mezoni/tekshiruv:
+  - Bitta ish ikki concurrent requestdan ikki final revision chiqarmasin.
+  - Idempotency replay, stale draft va closes_at testlari o‘tsin.
+Rasmiy manbalar:
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+  [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
+  [R32] pytest-django: https://pytest-django.readthedocs.io/en/latest/
+Natijani P000 formatida ber, progressga P042ni yoz va to‘xta.
+PROMPT OXIRI [P042]
+
+==============================================================================
+08-DARS: BAHOLASH VA JURNAL
+==============================================================================
+
+PROMPT BOSHI [P043]
+P043 | Grade va CriterionScore modellari
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P042 bajarilgan va tekshirilgan.
+Stack: Django ORM, PostgreSQL, Decimal.
+Yangi dependency/qism: Grade, CriterionScore va GradeRevision.
+Avval tushuntir: Baholash drafti; revisionga baho; zero va ungraded farqi.
+Faqat shu ishlarni bajar:
+  1) Grade revisionga OneToOne, grader,state,total,feedback,version,published_at; CriterionScore
+    grade+criterion unique.
+  2) Ball >=0 va revision tarixini PROTECT; GradeRevision old/new/sabab uchun model.
+  3) Baho final totalni pupil yuboradigan field emasligini docsda yoz.
+Scope cheklovi: Grade endpoint, chorak formulasi yoki AI feedback yozma.
+Qabul mezoni/tekshiruv:
+  - Bitta revisionga ikki aktiv Grade yaratish rad.
+  - CriterionScore manfiy qiymat va duplicate criterion rad.
+Rasmiy manbalar:
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+  [R33] Django constraint API: https://docs.djangoproject.com/en/5.2/ref/models/constraints/
+Natijani P000 formatida ber, progressga P043ni yoz va to‘xta.
+PROMPT OXIRI [P043]
+
+PROMPT BOSHI [P044]
+P044 | Teacher uchun draft baho yozish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P043 bajarilgan va tekshirilgan.
+Stack: DRF Serializer, transaction, Decimal, course permission.
+Yangi dependency/qism: PUT revisions/{id}/grade/.
+Avval tushuntir: Rubric input; server total; har criterion uchun aynan bitta ball.
+Faqat shu ishlarni bajar:
+  1) Teacher o‘z submitted revisioniga points+feedback yozadi. Grade=draft.
+  2) Barcha rubric criterionlar to‘liq, begona ID yo‘q, ball <=max; total serverda hisoblanadi.
+  3) Version orqali stale draft tahririni aniqlagin; pupil draft Grade’ni ko‘rmasin.
+Scope cheklovi: Publish, regrade, gradebook yoki avtomatik final baho yozma.
+Qabul mezoni/tekshiruv:
+  - 5/6+2/3+1/1 => 8/10.
+  - Yetishmagan/begona criterion, maxdan katta ball yoki pupil write rad.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R13] Validators: https://www.django-rest-framework.org/api-guide/validators/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P044ni yoz va to‘xta.
+PROMPT OXIRI [P044]
+
+PROMPT BOSHI [P045]
+P045 | Bahoni pupilga e’lon qilish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P044 bajarilgan va tekshirilgan.
+Stack: DRF action, existing Grade, transaction.
+Yangi dependency/qism: publish_grade service.
+Avval tushuntir: Draft/publication chegarasi; publication validation; server audit.
+Faqat shu ishlarni bajar:
+  1) POST revisions/{id}/grade/publish/ action; grade/revision version, teacher can_grade va rubric
+    tekshirilsin.
+  2) State/published_at va audit bitta transactionda. Takror publish ayni natija.
+  3) Pupil uchun faqat o‘z published grade detail responseini qo‘sh.
+Scope cheklovi: Regrade, Notification worker yoki butun jurnalni qurma.
+Qabul mezoni/tekshiruv:
+  - Draft yashirin, publishdan keyin o‘z bahosi ko‘rinadi.
+  - Begona pupil/teacher IDga kirish rad; duplicate publish bitta.
+Rasmiy manbalar:
+  [R08] ViewSet/router: https://www.django-rest-framework.org/api-guide/viewsets/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P045ni yoz va to‘xta.
+PROMPT OXIRI [P045]
+
+PROMPT BOSHI [P046]
+P046 | Qayta baholash va o‘zgarmas audit
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P045 bajarilgan va tekshirilgan.
+Stack: DRF command serializer, row lock, GradeRevision.
+Yangi dependency/qism: regrade service.
+Avval tushuntir: Audit revision; lost update; sabab bilan o‘zgartirish.
+Faqat shu ishlarni bajar:
+  1) Published Grade uchun tor regrade endpoint: expected_version, criterion scores, reason.
+  2) Lock ostida eski/yangi qiymat, grader, sabab va vaqtni GradeRevisionga yoz. Yangi holatning
+    e’lon siyosatini aniq belgilab qo‘llagin.
+  3) Oldingi bahoni izsiz almashtirish va client totalni qabul qilish yo‘q.
+Scope cheklovi: Apellyatsiya tizimi, audit export yoki qarama-qarshi grade historyni o‘chirish
+qurma.
+Qabul mezoni/tekshiruv:
+  - Eski va yangi natija auditda qoladi; sababsiz regrade rad.
+  - Eskirgan version yoki boshqa teacher rad.
+Rasmiy manbalar:
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+Natijani P000 formatida ber, progressga P046ni yoz va to‘xta.
+PROMPT OXIRI [P046]
+
+PROMPT BOSHI [P047]
+P047 | Pupilning shaxsiy jurnal API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P046 bajarilgan va tekshirilgan.
+Stack: DRF ListAPIView, queryset selectors, grade serializers.
+Yangi dependency/qism: GET /me/gradebook/.
+Avval tushuntir: Own-data scope; null/zero/missing; revision tanlash siyosati.
+Faqat shu ishlarni bajar:
+  1) Pupilning course/term bo‘yicha published uy ishi baholari va criterion feedbackini qaytar.
+  2) Qayta topshirishda “qaysi revision joriy baho?” siyosatini tanla: oxirgi published bahoni joriy
+    ko‘rsat, oldingilar historyda.
+  3) Ungraded, missing, zero, returned farqli status; oddiy ballni hali chorak rasmiy bahosiga
+    aylantirma.
+Scope cheklovi: Teacher jurnali, chorak weight formulasi yoki exam natijalarini hozir ulama.
+Qabul mezoni/tekshiruv:
+  - Pupil B jurnali A responsega aralashmasin.
+  - 0 haqiqiy baho va ungraded/null farqlansin.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+Natijani P000 formatida ber, progressga P047ni yoz va to‘xta.
+PROMPT OXIRI [P047]
+
+PROMPT BOSHI [P048]
+P048 | Teacher jurnali va tekshirish navbati
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P047 bajarilgan va tekshirilgan.
+Stack: DRF scoped list, ORM annotate/prefetch, existing grade.
+Yangi dependency/qism: Course gradebook read va submission queue.
+Avval tushuntir: Aggregate read; data minimization; BOLA regression.
+Faqat shu ishlarni bajar:
+  1) Assigned teacherga GET courses/{id}/gradebook/ va vazifa submissions listini bering; tekshirish
+    navbati submitted/graded holatlari bilan.
+  2) Minimal pupil identifikatori, revision, published/draft grade holati; keraksiz profil
+    berilmasin.
+  3) Teacher A/B va pupil salbiy testlari, P043-P047 regressionini yakunla.
+Scope cheklovi: Barcha maktab reytingi, ota-ona roli, dashboard yoki chorak hisobini yozma.
+Qabul mezoni/tekshiruv:
+  - Faqat tegishli course ro‘yxati; pupil submissions listini olmaydi.
+  - Grading oqimi: draft > publish > pupil read > regrade tarixi ishlasin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
+Natijani P000 formatida ber, progressga P048ni yoz va to‘xta.
+PROMPT OXIRI [P048]
+
+==============================================================================
+09-DARS: JADVAL VA DAVOMAT
+==============================================================================
+
+PROMPT BOSHI [P049]
+P049 | Room va WeeklySlot: qo‘lda dars jadvali
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P048 bajarilgan va tekshirilgan.
+Stack: Django ORM, DRF generics, manage_academics.
+Yangi dependency/qism: scheduling app, Room/WeeklySlot.
+Avval tushuntir: Weekly qoida vs real sana; local time vs UTC datetime.
+Faqat shu ishlarni bajar:
+  1) Room va WeeklySlot(course,teacher,room,weekday,start/end,valid_from/to) model/serializer yoz.
+  2) manage_academics uchun slot create/read/update; teacher shu coursega biriktirilgan bo‘lsin.
+  3) Hozir oddiy interval validatsiyasi; to‘qnashuvning parallel himoyasi P050da. Bu tugamaguncha
+    productionga chiqarma.
+Scope cheklovi: Avtomatik jadval solveri, session, davomat yoki ta’til kalendari yozma.
+Qabul mezoni/tekshiruv:
+  - start>=end va noto‘g‘ri teacher/course bog‘lanishi rad.
+  - Oddiy teacher/pupil jadvalni o‘zgartira olmasin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R13] Validators: https://www.django-rest-framework.org/api-guide/validators/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P049ni yoz va to‘xta.
+PROMPT OXIRI [P049]
+
+PROMPT BOSHI [P050]
+P050 | Jadval to‘qnashuvining DB transaction himoyasi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P049 bajarilgan va tekshirilgan.
+Stack: PostgreSQL, atomic/select_for_update, existing WeeklySlot.
+Yangi dependency/qism: Bitta maktab uchun timetable lock qatori.
+Avval tushuntir: Interval overlap; adjacent interval; parallel check-then-insert race.
+Faqat shu ishlarni bajar:
+  1) Slot create/update serviceni timetable lock ostida bajargin; bir xil sinf, teacher yoki xona
+    bo‘yicha kesishuvni tekshir.
+  2) Weekday va amal qilish sana oralig‘i hisobga olinsin. Update o‘z IDsi bilan konflikt qilmasin.
+  3) 08:00-08:45 va 08:45-09:30 tutash bo‘lib konflikt emasligini aniq qil.
+Scope cheklovi: Exclusion extension/solver, schedule exception yoki session materialization qurma.
+Qabul mezoni/tekshiruv:
+  - Overlap teacher/class/room bo‘yicha rad.
+  - Ikki parallel create ikkalasi konflikt holatda muvaffaqiyatli bo‘lmasin.
+Rasmiy manbalar:
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+Natijani P000 formatida ber, progressga P050ni yoz va to‘xta.
+PROMPT OXIRI [P050]
+
+PROMPT BOSHI [P051]
+P051 | Real LessonSession va sana kesimidagi read API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P050 bajarilgan va tekshirilgan.
+Stack: Django ORM, zoneinfo, DRF query serializer.
+Yangi dependency/qism: LessonSession va materialize service.
+Avval tushuntir: Recurrence instance; local maktab sanasi; unique idempotent generation.
+Faqat shu ishlarni bajar:
+  1) Mavjud slotdan cheklangan sana oynasi uchun LessonSession yaratadigan idempotent
+    command/service yoz.
+  2) Local Asia/Tashkent sanasi+vaqtini UTCga aylantir; (slot,local_date) unique.
+  3) GET schedule?from=&to= maksimum 31 kun; pupil/teacher scope bilan faqat o‘z sessionlari.
+Scope cheklovi: Davomat, Celery schedule generatori, schedule exception yoki frontend calendar
+yozma.
+Qabul mezoni/tekshiruv:
+  - Materialization ikki marta duplicate bermasin.
+  - UTC conversion va 31 kundan katta interval validatsiyasi tekshirilsin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R13] Validators: https://www.django-rest-framework.org/api-guide/validators/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P051ni yoz va to‘xta.
+PROMPT OXIRI [P051]
+
+PROMPT BOSHI [P052]
+P052 | Bitta sanadagi darsni ko‘chirish yoki bekor qilish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P051 bajarilgan va tekshirilgan.
+Stack: Existing WeeklySlot/LessonSession, DRF action, transaction.
+Yangi dependency/qism: ScheduleException.
+Avval tushuntir: Bitta occurrence istisnosi vs haftalik qoidani o‘zgartirish.
+Faqat shu ishlarni bajar:
+  1) Cancel/move uchun operator teacher endpointi yoz; oldingi hafta qoidasi o‘zgarmasin.
+  2) Move yangi teacher/xona/sinf vaqt konfliktini P050 qoidasi va lock bilan tekshirsin.
+  3) Attendance mavjud sessionni o‘chirish o‘rniga status/audit; o‘rinbosar mavjud kurs scope
+    siyosatiga mos.
+Scope cheklovi: Bayramlarni avtomatik import, solver yoki bulk move yozma.
+Qabul mezoni/tekshiruv:
+  - Bitta sana move boshqa hafta darsini ko‘chirmasin.
+  - Cancel tarixi qoladi; konfliktli move rollback.
+Rasmiy manbalar:
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+Natijani P000 formatida ber, progressga P052ni yoz va to‘xta.
+PROMPT OXIRI [P052]
+
+PROMPT BOSHI [P053]
+P053 | Bitta dars davomatini atomar belgilash
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P052 bajarilgan va tekshirilgan.
+Stack: DRF ListSerializer, Django bulk/transaction.
+Yangi dependency/qism: Attendance va session attendance PUT.
+Avval tushuntir: Bulk input vs partial success; lesson-date enrollment; unmarked.
+Faqat shu ishlarni bajar:
+  1) Attendance(session,pupil,status) unique; present/absent/late/excused/unmarked siyosatini
+    belgila.
+  2) PUT sessions/{id}/attendance/ assigned teacher uchun; pupil session sanasida coursega tegishli
+    bo‘lsin.
+  3) Duplicate pupil yoki bitta noto‘g‘ri row bo‘lsa hammasi rad. Oldingi qiymat o‘zgarsa
+    sabab/audit talab et.
+Scope cheklovi: Butun sinfni avtomatik present, turniket integratsiya yoki statistik dashboard
+yozma.
+Qabul mezoni/tekshiruv:
+  - Begona pupil/teacher yoki cancelled darsga write rad.
+  - Bitta xato row yarim davomat qoldirmasin.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P053ni yoz va to‘xta.
+PROMPT OXIRI [P053]
+
+PROMPT BOSHI [P054]
+P054 | Davomat read va tuzatish tarixini tekshirish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P053 bajarilgan va tekshirilgan.
+Stack: DRF ListAPIView, date filtering, Attendance audit.
+Yangi dependency/qism: Pupil/teacher attendance read contract.
+Avval tushuntir: Corrected record; denominator; cancelled/unmarked farqi.
+Faqat shu ishlarni bajar:
+  1) Pupil o‘z davomatini, teacher o‘z course/session davomatini ko‘rsin.
+  2) Minimal summary: eligible held lessons, marked statuses; cancelled dars denominatorga kirmasin,
+    unmarked present deb olinmasin.
+  3) Auditli tuzatish va 9-dars permission/concurrency regressionini yakunla.
+Scope cheklovi: Official davomat reytingi, ota-ona notificationi yoki export builder yozma.
+Qabul mezoni/tekshiruv:
+  - Pupil boshqa pupil davomatini olmasin.
+  - Cancelled va unmarked statistikada to‘g‘ri; tuzatish historysi qoladi.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
+Natijani P000 formatida ber, progressga P054ni yoz va to‘xta.
+PROMPT OXIRI [P054]
+
+==============================================================================
+10-DARS: REDIS, CELERY VA BILDIRISHNOMA
+==============================================================================
+
+PROMPT BOSHI [P055]
+P055 | Redis va Celeryni alohida tushunib ulash
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P054 bajarilgan va tekshirilgan.
+Stack: Redis, Celery, Docker Compose, Django.
+Yangi dependency/qism: redis broker, worker va bitta beat service.
+Avval tushuntir: Cache vs broker; producer/queue/worker; Beat worker emas; at-least-once.
+Faqat shu ishlarni bajar:
+  1) Composega Redis, worker va bitta Beat qo‘sh; app discovery va env konfiguratsiya.
+  2) Bitta zararsiz diagnostic task bilan worker ishlashini tekshir. DB biznes ma’lumotini Redisga
+    ko‘chirma.
+  3) Default/scans/ai queue nomlarini konfiguratsiyada belgila; production cache/broker ajratilishi
+    docsda.
+Scope cheklovi: Notification, reminder, outbox, AI yoki barcha tasklarni bir promptda yozma.
+Qabul mezoni/tekshiruv:
+  - Task workerda bajarilsin; request worker natijasini sync kutmasin.
+  - Beat bir nusxa ekanini startup/runbookda ko‘rsat.
+Rasmiy manbalar:
+  [R17] Celery tasks: https://docs.celeryq.dev/en/stable/userguide/tasks.html
+  [R18] Celery Beat: https://docs.celeryq.dev/en/stable/userguide/periodic-tasks.html
+  [R19] Redis tushunchalari: https://redis.io/docs/latest/develop/
+  [R30] Docker Compose: https://docs.docker.com/compose/
+Natijani P000 formatida ber, progressga P055ni yoz va to‘xta.
+PROMPT OXIRI [P055]
+
+PROMPT BOSHI [P056]
+P056 | DB outbox va takror deliveryga chidamli dispatcher
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P055 bajarilgan va tekshirilgan.
+Stack: Django atomic/on_commit, Celery, PostgreSQL.
+Yangi dependency/qism: OutboxEvent va dispatcher.
+Avval tushuntir: Commit-broker uzilishi; idempotent consumer; sent vs processed.
+Faqat shu ishlarni bajar:
+  1) OutboxEvent(kind,payload,dedup_key,status,attempts,next_run_at) yarat; unknown kind aniq
+    failed/deferred bo‘lsin.
+  2) Dispatcher DB event IDni queuega beradi; broker xatosida event yo‘qolmasin. Bitta test handler
+    bilan replay ko‘rsat.
+  3) on_commit faqat uyg‘otish; davriy dispatcher pending eventni ham olsin. Unique biznes effectni
+    consumer ham tekshirishi kerak.
+Scope cheklovi: Email, reminder, notification va scanner handlerlarini hozir qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Rollback transaction outbox effect bermasin.
+  - Broker uzilishidan keyin replay; duplicate handler bitta effect.
+Rasmiy manbalar:
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R17] Celery tasks: https://docs.celeryq.dev/en/stable/userguide/tasks.html
+  [R18] Celery Beat: https://docs.celeryq.dev/en/stable/userguide/periodic-tasks.html
+Natijani P000 formatida ber, progressga P056ni yoz va to‘xta.
+PROMPT OXIRI [P056]
+
+PROMPT BOSHI [P057]
+P057 | Course e’loni va publish eventi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P056 bajarilgan va tekshirilgan.
+Stack: DRF generics/action, Django ORM, existing OutboxEvent.
+Yangi dependency/qism: Announcement.
+Avval tushuntir: Audience scope; draft/published; publish va outbox atomarligi.
+Faqat shu ishlarni bajar:
+  1) Course Announcement create/read/publish: teacher assigned coursega, pupil published o‘z
+    coursega.
+  2) Publish + announcement eventini bitta transactionga yoz; hali notification delivery handlerini
+    qurma.
+  3) Deadline va grade kabi boshqa eventlarni bir yo‘la ulama.
+Scope cheklovi: Chat, email, notification modeli yoki global school admin paneli yozma.
+Qabul mezoni/tekshiruv:
+  - Begona coursega e’lon berish/ko‘rish rad.
+  - Publish retry bitta outbox event qoldirsin.
+Rasmiy manbalar:••••
+  [R08] ViewSet/router: https://www.django-rest-framework.org/api-guide/viewsets/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P057ni yoz va to‘xta.
+PROMPT OXIRI [P057]
+
+PROMPT BOSHI [P058]
+P058 | In-app notification va o‘qilganlik
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P057 bajarilgan va tekshirilgan.
+Stack: Django ORM, Celery consumer, DRF list/update.
+Yangi dependency/qism: Notification va announcement event handler.
+Avval tushuntir: Fan-out; recipient scope; event_key dedup; unread status.
+Faqat shu ishlarni bajar:
+  1) Announcement handler faqat tegishli pupil/teacher recipientlariga Notification yaratsin;
+    unique(recipient,event_key).
+  2) GET notifications/ va PATCH notifications/{id}/read/ current user scope; paginated list.
+  3) P056 dispatcherni endi real event bilan ulang; bir xil delivery notificationni ko‘paytirmasin.
+Scope cheklovi: Push/WebSocket, email/SMS yoki deadline reminder hali yo‘q.
+Qabul mezoni/tekshiruv:
+  - Duplicate event bitta recipientga bitta notification.
+  - Pupil B notificationini A read qilib belgilay olmasin.
+Rasmiy manbalar:
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R17] Celery tasks: https://docs.celeryq.dev/en/stable/userguide/tasks.html
+  [R21] Pagination: https://www.django-rest-framework.org/api-guide/pagination/
+Natijani P000 formatida ber, progressga P058ni yoz va to‘xta.
+PROMPT OXIRI [P058]
+
+PROMPT BOSHI [P059]
+P059 | Deadline yaqinlashganda eslatma
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P058 bajarilgan va tekshirilgan.
+Stack: Celery Beat, PostgreSQL, clock, existing Notification.
+Yangi dependency/qism: Reminder dedup va deadline_version.
+Avval tushuntir: Periodic polling; clock boundary; deadline o‘zgarsa event yaroqliligi.
+Faqat shu ishlarni bajar:
+  1) Har 5 daqiqada yaqin deadline uchun bir tur reminder yaratadigan task yoz; masalan 24 soat
+    oldin.
+  2) Unique(pupil,assignment,deadline_version,kind); yuborishda pupil hali tegishli ekanini va
+    vazifa versionini qayta tekshir.
+  3) Auditli deadline-change action qo‘shish o‘rniga hozir service/command orqali nazoratli
+    o‘zgartirish va version bump; stale reminder bekor.
+Scope cheklovi: Har xil ko‘p reminder turi, individual deadline API yoki email yuborishni qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Ikki Beat tick reminder duplicate qilmasin.
+  - Deadline o‘zgarsa oldingi versiya yuborilmasin; no scope recipient chiqmasin.
+Rasmiy manbalar:
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R17] Celery tasks: https://docs.celeryq.dev/en/stable/userguide/tasks.html
+  [R18] Celery Beat: https://docs.celeryq.dev/en/stable/userguide/periodic-tasks.html
+Natijani P000 formatida ber, progressga P059ni yoz va to‘xta.
+PROMPT OXIRI [P059]
+
+PROMPT BOSHI [P060]
+P060 | Haqiqiy antivirus scan worker
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P059 bajarilgan va tekshirilgan.
+Stack: Celery scans queue, ClamAV yoki configured antivirus adapter, private storage.
+Yangi dependency/qism: Production scanner adapter va scan event.
+Avval tushuntir: Quarantine lifecycle; clean/infected/failed; hash va retry.
+Faqat shu ishlarni bajar:
+  1) Upload commitdan keyin outbox orqali scan job yaralsin; scanner private bytesni tekshirib
+    status yozsin.
+  2) Productionda fake scanner ishlashini configuration check bilan blokla. External scanner yo‘q
+    bo‘lsa fayl failed/pending; fail-open emas.
+  3) Same attachment/hash duplicate job natijani buzmasin; timeout/retry cheklangan. P029 download
+    clean gate saqlansin.
+Scope cheklovi: Video transcode, OCR, AI extraction yoki barcha background tasklarni refactor qilma.
+Qabul mezoni/tekshiruv:
+  - Infected yoki scanner unavailable fayl download/submitga chiqmasin.
+  - Worker duplicate/restart va clean holati test; real scanner smoke imkon bo‘lsa bajarilsin.
+Rasmiy manbalar:
+  [R17] Celery tasks: https://docs.celeryq.dev/en/stable/userguide/tasks.html
+  [R26] File xavfsizligi:
+    https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+Natijani P000 formatida ber, progressga P060ni yoz va to‘xta.
+PROMPT OXIRI [P060]
+
+==============================================================================
+11-DARS: SAVOL BANKI VA NAZORAT YARATISH
+==============================================================================
+
+PROMPT BOSHI [P061]
+P061 | Single-choice savol banki
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P060 bajarilgan va tekshirilgan.
+Stack: Django ORM, DRF ModelViewSet/serializers, course scope.
+Yangi dependency/qism: assessments app, Question/Option.
+Avval tushuntir: Savol vs option; single correct; teacher-only bank.
+Faqat shu ishlarni bajar:
+  1) Question(course,stem,type,version,state) va Option(text,is_correct) yarat; single-choice uchun
+    aynan bitta correct.
+  2) Assigned teacher uchun draft bank create/list/detail; explicit teacher serializer.
+  3) Pupilga bankning hech bir ro‘yxati yoki correct flag berilmasin.
+Scope cheklovi: Essay, exam, random selection yoki AI yaratma.
+Qabul mezoni/tekshiruv:
+  - 0/2 correct option rad.
+  - Pupil yoki boshqa teacher bankni ko‘ra/yoza olmasin.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R06] Field va relations: https://www.django-rest-framework.org/api-guide/relations/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+Natijani P000 formatida ber, progressga P061ni yoz va to‘xta.
+PROMPT OXIRI [P061]
+
+PROMPT BOSHI [P062]
+P062 | Essay turi va savol versiyasi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P061 bajarilgan va tekshirilgan.
+Stack: Existing Question, DRF validation, Django ORM.
+Yangi dependency/qism: Essay input va version qoidasi.
+Avval tushuntir: Objective vs manual grading; published savolning immutable versiyasi.
+Faqat shu ishlarni bajar:
+  1) Question.type=essay qo‘sh; essayda correct option yo‘q, teacher rubric/marking note private.
+  2) Ishlatilgan/published savolni tahrirlash yangi version yaratsin; eski savol o‘chirilmasin.
+  3) Version oilasi va archived holatini minimal tuz; bank ichidagi bitta resurs oqimi bilan
+    cheklan.
+Scope cheklovi: Exam, grading endpoint, mixed question engine yoki AI yo‘q.
+Qabul mezoni/tekshiruv:
+  - Essayga option kaliti yuborish rad.
+  - Yangi version eski prompt/kalitni o‘zgartirmasin.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R13] Validators: https://www.django-rest-framework.org/api-guide/validators/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P062ni yoz va to‘xta.
+PROMPT OXIRI [P062]
+
+PROMPT BOSHI [P063]
+P063 | Nazoratning draft metadata API’si
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P062 bajarilgan va tekshirilgan.
+Stack: Django ORM, DRF generics, datetime/Decimal.
+Yangi dependency/qism: Exam modeli va teacher create/read.
+Avval tushuntir: opens/closes/duration; attempt_limit; result_release_at.
+Faqat shu ishlarni bajar:
+  1) Exam(course,term,title,opens_at,closes_at,duration,attempt_limit,result_release_at,state)
+    yarat.
+  2) Assigned teacher draft create/update; pupilga draft ko‘rinmasin. Sana/positive duration/limit
+    validatsiyasi.
+  3) Natija siyosati: exam closes va release_atdan oldin pupilga score/kalit berilmasligi uchun
+    contractni belgilagin.
+Scope cheklovi: Savol qo‘shish, publish, attempt start yoki auto-grade yozma.
+Qabul mezoni/tekshiruv:
+  - Teskari vaqt, 0 duration va noto‘g‘ri course/term rad.
+  - Pupil draft nazoratni ko‘rmasin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R13] Validators: https://www.django-rest-framework.org/api-guide/validators/
+Natijani P000 formatida ber, progressga P063ni yoz va to‘xta.
+PROMPT OXIRI [P063]
+
+PROMPT BOSHI [P064]
+P064 | Examga savollarni bog‘lash
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P063 bajarilgan va tekshirilgan.
+Stack: Existing Exam/Question, DRF list input, transaction.
+Yangi dependency/qism: ExamItem draft builder.
+Avval tushuntir: Bank reference vs exam snapshot; tartib va max score.
+Faqat shu ishlarni bajar:
+  1) PUT exams/{id}/items/ draft nazoratga savol ID+version+points+position ro‘yxatini bersin.
+  2) Savollar shu teacher/coursega tegishli, points>0, position unique; butun update atomic.
+  3) Hozir bank version referencelari; publishda immutable snapshot olish keyingi promptda.
+Scope cheklovi: Random generator, publish, attempt yoki answer API qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Boshqa coursening savoli va duplicate position rad.
+  - Bitta noto‘g‘ri item yarim nazorat qoldirmasin.
+Rasmiy manbalar:
+  [R06] Field va relations: https://www.django-rest-framework.org/api-guide/relations/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P064ni yoz va to‘xta.
+PROMPT OXIRI [P064]
+
+PROMPT BOSHI [P065]
+P065 | Exam publish va immutable snapshot
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P064 bajarilgan va tekshirilgan.
+Stack: DRF action, row lock, existing ExamItem.
+Yangi dependency/qism: publish_exam service.
+Avval tushuntir: Snapshot nega kerak; kalit va optionlar serverda; publish invarianti.
+Faqat shu ishlarni bajar:
+  1) Publishda barcha savol/variant/marking note/points snapshotini materialize qil; published exam
+    tarkibi immutable.
+  2) Itemlar soni/kaliti/max ball/sana va limit tekshirilsin. State va audit bir transactionda.
+  3) Savol banki keyin tahrirlanganda published snapshot o‘zgarmasin.
+Scope cheklovi: Attempt snapshot, start, answer checking yoki AI savol tanlash yo‘q.
+Qabul mezoni/tekshiruv:
+  - Savol tahriri exam snapshotga ta’sir qilmasin.
+  - Publish retry duplicate item/ball yaratmasin.
+Rasmiy manbalar:
+  [R08] ViewSet/router: https://www.django-rest-framework.org/api-guide/viewsets/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+Natijani P000 formatida ber, progressga P065ni yoz va to‘xta.
+PROMPT OXIRI [P065]
+
+PROMPT BOSHI [P066]
+P066 | Kalitsiz pupil nazorat kartasi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P065 bajarilgan va tekshirilgan.
+Stack: DRF read serializers, existing Exam scope.
+Yangi dependency/qism: Pupil exam list/detail va teacher preview.
+Avval tushuntir: Output payload xavfsizligi; hidden field emas, field yo‘qligi.
+Faqat shu ishlarni bajar:
+  1) GET exams/ va exams/{id}/: pupilga nom, vaqt, duration, attempt_limit, ochiq/yopiq status;
+    correct data umuman yo‘q.
+  2) Teacher preview alohida ruxsat va serializer; private kalit oddiy pupil responsega kirmasin.
+  3) 11-dars regression va OpenAPI required/private fieldlarni tekshir.
+Scope cheklovi: Pupilga savol banki, attempt start yoki natijani hozir yozma.
+Qabul mezoni/tekshiruv:
+  - JSON rekursiv ko‘rib pupil response’da is_correct/marking note topilmasin.
+  - Begona exam ID va draft nazorat yashirin.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
+  [R24] OpenAPI/drf-spectacular: https://drf-spectacular.readthedocs.io/en/latest/readme.html
+Natijani P000 formatida ber, progressga P066ni yoz va to‘xta.
+PROMPT OXIRI [P066]
+
+==============================================================================
+12-DARS: VAQTLI NAZORATNI BAJARISH
+==============================================================================
+
+PROMPT BOSHI [P067]
+P067 | Nazorat urinishini bir marta boshlash
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P066 bajarilgan va tekshirilgan.
+Stack: PostgreSQL row lock/unique, DRF action, aware clock.
+Yangi dependency/qism: Attempt/AttemptItem va start_attempt.
+Avval tushuntir: Active attempt; min(start+duration,closes); concurrent start.
+Faqat shu ishlarni bajar:
+  1) POST exams/{id}/attempts/ current pupil uchun; published/open/enrollment/attempt_limit tekshir.
+  2) Exam-pupil bo‘yicha mavjud Enrollment qatorini lock qil; active attempt bo‘lsa qaytar, bo‘lmasa
+    yangisini yarat. Partial unique bitta active attempt.
+  3) Savol/variant tartibini bir marta AttemptItemga snapshot qil; pupil response kalitsiz,
+    expires_at va server_now bilan.
+Scope cheklovi: Autosave, finish, timer UI yoki anti-cheat kuzatuvini yozma.
+Qabul mezoni/tekshiruv:
+  - Parallel start bitta active attempt qoldirsin.
+  - Closed exam, inactive enrollment yoki limit oshishi rad.
+Rasmiy manbalar:
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+Natijani P000 formatida ber, progressga P067ni yoz va to‘xta.
+PROMPT OXIRI [P067]
+
+PROMPT BOSHI [P068]
+P068 | Attempt resume va versionli javob autosave
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P067 bajarilgan va tekshirilgan.
+Stack: DRF GET/PUT, Answer modeli, optimistic version va row lock.
+Yangi dependency/qism: Attempt read va Answer upsert.
+Avval tushuntir: Server ACK; lost update; answer item/option ownership; expiry.
+Faqat shu ishlarni bajar:
+  1) GET attempts/{id}/ o‘z urinishidagi kalitsiz savollar va oldingi javoblarni qaytarsin.
+  2) PUT attempts/{id}/answers/{item_id}/: selected option yoki essay text, expected_version; option
+    aynan shu attempt itemdan bo‘lsin.
+  3) Attempt IN_PROGRESS va now<expires_at; expired/stale rad. Response version/saved_at serverdan.
+Scope cheklovi: Offline kech javoblarni qabul qilish, finish yoki scoring yozma.
+Qabul mezoni/tekshiruv:
+  - Reload read saqlangan javobni qaytarsin; kalit yo‘q.
+  - Boshqa option/item, stale tab, expired yoki begona attempt write rad.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+Natijani P000 formatida ber, progressga P068ni yoz va to‘xta.
+PROMPT OXIRI [P068]
+
+PROMPT BOSHI [P069]
+P069 | Idempotent finish va objective score
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P068 bajarilgan va tekshirilgan.
+Stack: DRF action, atomic/select_for_update, existing snapshot.
+Yangi dependency/qism: finalize_attempt service.
+Avval tushuntir: Finish bir marta; saved answers; pending_manual.
+Faqat shu ishlarni bajar:
+  1) POST attempts/{id}/finish/ attemptni lock qilib saqlangan single-choice javoblardan score
+    hisoblasin.
+  2) Essay bo‘lsa pending_manual; bo‘lmasa finalized. Duplicate finish avvalgi yakunni qaytarsin.
+  3) Expiry’dan keyin finish faqat oldin saqlangan javobni yakunlaydi; request yangi answer/total
+    yuborib ball qo‘sha olmasin.
+Scope cheklovi: Essay grading, result release, expiry worker yoki tutor yozma.
+Qabul mezoni/tekshiruv:
+  - Parallel finish bitta hisoblangan natija.
+  - Frontdan score yoki kech yangi answer kiritish natijaga ta’sir qilmasin.
+Rasmiy manbalar:
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+Natijani P000 formatida ber, progressga P069ni yoz va to‘xta.
+PROMPT OXIRI [P069]
+
+PROMPT BOSHI [P070]
+P070 | Essay baholash va natijani chiqarish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P069 bajarilgan va tekshirilgan.
+Stack: DRF teacher command/read serializers, AttemptGrade, Decimal.
+Yangi dependency/qism: Manual exam grade va result endpoint.
+Avval tushuntir: Objective/manual total; release window; own result scope.
+Faqat shu ishlarni bajar:
+  1) Assigned can_grade teacher essay javobiga 0..item.max_score ball va feedback bersin;
+    version/audit.
+  2) Barcha essay tekshirilgach totalni server objective+manual yig‘sin. GET attempts/{id}/result/
+    faqat o‘z pupil va release siyosatidan keyin.
+  3) Me/teacher gradebookga exam natijasini alohida source kind bilan ulang; duplicate finish/manual
+    update duplicate jurnal entry yaratmasin.
+Scope cheklovi: Chorak rasmiy weight, AI auto-grade yoki exam appeal yozma.
+Qabul mezoni/tekshiruv:
+  - Essay pending bo‘lsa final total to‘liq deb qaytmasin.
+  - Release vaqtidan oldin score/kalit chiqmasin; begona teacher/pupil rad.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+Natijani P000 formatida ber, progressga P070ni yoz va to‘xta.
+PROMPT OXIRI [P070]
+
+PROMPT BOSHI [P071]
+P071 | Expired attemptni fon va API orqali yakunlash
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P070 bajarilgan va tekshirilgan.
+Stack: Celery Beat, existing finalize service, clock.
+Yangi dependency/qism: Expiry sweep task va expired access behavior.
+Avval tushuntir: Frontend timer haqiqat emas; scheduler kechikishi deadline uzaytirmaydi.
+Faqat shu ishlarni bajar:
+  1) Beat due active attemptlarni topib ayni finalize service’ni chaqirsin.
+  2) Attempt read/answer yo‘lida expired holat aniqlansa yozish rad, yakunlash service xavfsiz
+    ishlasin. Worker/APIdan bir payt kelish race’ini hisobga ol.
+  3) Task cheklangan batch, retry va idempotent; bir urinishni boshidan hisoblayvermasin.
+Scope cheklovi: WebSocket timer, kechikish kompensatsiyasi yoki ko‘chirishni AI aniqlash yozma.
+Qabul mezoni/tekshiruv:
+  - Celery o‘chsa ham expires_atdan keyin answer qabul qilinmasin.
+  - API+worker parallel finalize bitta yakun.
+Rasmiy manbalar:
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+  [R17] Celery tasks: https://docs.celeryq.dev/en/stable/userguide/tasks.html
+  [R18] Celery Beat: https://docs.celeryq.dev/en/stable/userguide/periodic-tasks.html
+Natijani P000 formatida ber, progressga P071ni yoz va to‘xta.
+PROMPT OXIRI [P071]
+
+PROMPT BOSHI [P072]
+P072 | Attempt lifecycle concurrency regression
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P071 bajarilgan va tekshirilgan.
+Stack: pytest-django transaction tests, PostgreSQL, APIClient.
+Yangi dependency/qism: Yangi model/feature yo‘q.
+Avval tushuntir: Time boundary va haqiqiy parallel test; snapshot leakage.
+Faqat shu ishlarni bajar:
+  1) P067-P071 oqimini test fixture bilan boshidan yakunigacha tekshir.
+  2) Ikki start, ikki finish, expiry-vs-autosave, stale answer va result release case’lari.
+  3) Schema/curl transcriptni yoz; xato bo‘lsa faqat shu oqimni tuzat.
+Scope cheklovi: Yangi test turi, UI, leaderboard yoki exam analytics qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Kalit hech bir pupil payloadga sizmasin.
+  - DB connectionli race test va barcha boundary testlar o‘tsin.
+Rasmiy manbalar:
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+  [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
+  [R32] pytest-django: https://pytest-django.readthedocs.io/en/latest/
+Natijani P000 formatida ber, progressga P072ni yoz va to‘xta.
+PROMPT OXIRI [P072]
+
+==============================================================================
+13-DARS: DASHBOARD VA API SAMARADORLIGI
+==============================================================================
+
+PROMPT BOSHI [P073]
+P073 | Pupil dashboard API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P072 bajarilgan va tekshirilgan.
+Stack: DRF APIView/Serializer, ORM selectors, existing modules.
+Yangi dependency/qism: GET /me/dashboard/.
+Avval tushuntir: Aggregation resource; completion vs mastery; denominatorda eligible itemlar.
+Faqat shu ishlarni bajar:
+  1) Dashboardga bugungi darslar, 3 yaqin deadline va yangi published feedback summary qo‘sh.
+  2) Completion va topshirish statusini alohida maydon; mastery o‘rniga taxminiy label qo‘yma.
+  3) Faqat current pupil scope, published/tegishli majburiy itemlar. Baho hisobini qayta ixtiro
+    qilma.
+Scope cheklovi: Chart/UI, ML prediction, butun maktab reytingi yoki cache yozma.
+Qabul mezoni/tekshiruv:
+  - Pupil Bning ma’lumoti A responsega kirmasin.
+  - Unpublished/ungraded yozuv “0 ball” bo‘lib chiqmasin.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+Natijani P000 formatida ber, progressga P073ni yoz va to‘xta.
+PROMPT OXIRI [P073]
+
+PROMPT BOSHI [P074]
+P074 | Teacher dashboard va tekshirish summary
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P073 bajarilgan va tekshirilgan.
+Stack: DRF APIView/output Serializer, ORM aggregate.
+Yangi dependency/qism: GET /teaching/dashboard/.
+Avval tushuntir: Actionable counts; assigned courses; query duplication.
+Faqat shu ishlarni bajar:
+  1) Teacher uchun bugungi session, tekshirilmagan ishlar soni va kech ishlar navbatiga link/filter
+    metadata qaytar.
+  2) Faqat tegishli course; kerak bo‘lmagan pupilning to‘liq profilini chiqarmagin.
+  3) Dashboarddan mavjud teacher submissions APIga o‘tadigan contract yoz; yangi grading mexanizmi
+    yo‘q.
+Scope cheklovi: Administrator dashboard, barcha maktab statistikasi, UI yoki alert engine yozma.
+Qabul mezoni/tekshiruv:
+  - Teacher A B course count/ishlarini ko‘rmasin.
+  - Returned va ungraded holatlarini countda aniq ajrat.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+Natijani P000 formatida ber, progressga P074ni yoz va to‘xta.
+PROMPT OXIRI [P074]
+
+PROMPT BOSHI [P075]
+P075 | Filtering va paginationni izchil qilish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P074 bajarilgan va tekshirilgan.
+Stack: django-filter, DRF PageNumberPagination, OrderingFilter.
+Yangi dependency/qism: django-filter.
+Avval tushuntir: Foydalanuvchi filtri vs authorization scope; ordering allowlist; page_size maximum.
+Faqat shu ishlarni bajar:
+  1) Courses/topics/assignments/gradebook/notification readlariga tegishli FilterSet va izchil
+    pagination ulagin.
+  2) page_size=20/max100; course, term, status, date paramlari endpointga mos. Filterdan oldin
+    scope.
+  3) Allowlistdan tashqari model maydonlari bilan search/order berilmasin.
+Scope cheklovi: Elasticsearch, barcha maydonlar bo‘yicha search yoki permission o‘zgarishi yozma.
+Qabul mezoni/tekshiruv:
+  - page_size=10000 server limitini chetlab o‘tmasin.
+  - Filter/order paramlari begona course yoki maxfiy fieldni ochmasin.
+Rasmiy manbalar:
+  [R20] Filtering: https://www.django-rest-framework.org/api-guide/filtering/
+  [R21] Pagination: https://www.django-rest-framework.org/api-guide/pagination/
+Natijani P000 formatida ber, progressga P075ni yoz va to‘xta.
+PROMPT OXIRI [P075]
+
+PROMPT BOSHI [P076]
+P076 | N+1 query va kerakli indekslar
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P075 bajarilgan va tekshirilgan.
+Stack: Django ORM profiling, PostgreSQL EXPLAIN, query count tests.
+Yangi dependency/qism: Faqat o‘lchovga asoslangan indeks/selector o‘zgarishi.
+Avval tushuntir: select_related vs prefetch_related; annotate; indeksning narxi.
+Faqat shu ishlarni bajar:
+  1) Course/topic yoki teacher gradebookdagi bitta real N+1ni o‘lcha va tuzat.
+  2) Sekin query uchun mos indeksni faqat evidence bilan migrationda qo‘sh; mavjud indeksni tekshir.
+  3) Oldin/keyin query count va bir xil data uchun response tengligini docsga yoz.
+Scope cheklovi: Hamma fieldga indeks, raw SQLga to‘liq rewrite yoki cache yozma.
+Qabul mezoni/tekshiruv:
+  - Ro‘yxat 5dan 50ga o‘sganda query soni N bo‘yicha o‘smasin.
+  - Permission/filter natijasi optimizatsiyadan keyin ayni qolsin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+Natijani P000 formatida ber, progressga P076ni yoz va to‘xta.
+PROMPT OXIRI [P076]
+
+PROMPT BOSHI [P077]
+P077 | Scope bilan xavfsiz timetable cache
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P076 bajarilgan va tekshirilgan.
+Stack: Django cache API, Redis cache adapter, existing schedule selectors.
+Yangi dependency/qism: Alohida cache konfiguratsiyasi; brokerdan ajratish.
+Avval tushuntir: TTL; cache key; invalidation; cache miss failure.
+Faqat shu ishlarni bajar:
+  1) Faqat timetable readni cache qil: user/role/course/interval/version key, 60-300s TTL.
+  2) Slot/session exception o‘zgarsa version bump/invalidation. Redis cache ishlamasa DB read
+    fallback.
+  3) Broker bilan productionda alohida instance; lokal sharing bo‘lsa faqat dev deb hujjatlashtir.
+Scope cheklovi: Grade/answer/attemptni cachega yagona nusxa qilish yoki dashboard cache qo‘shma.
+Qabul mezoni/tekshiruv:
+  - A cache ma’lumoti Bga berilmasin.
+  - Schedule update eski javobni bermasin; cache outage readni to‘xtatmasin.
+Rasmiy manbalar:
+  [R19] Redis tushunchalari: https://redis.io/docs/latest/develop/
+  [R34] Django cache: https://docs.djangoproject.com/en/5.2/topics/cache/
+Natijani P000 formatida ber, progressga P077ni yoz va to‘xta.
+PROMPT OXIRI [P077]
+
+PROMPT BOSHI [P078]
+P078 | API xatolari va frontend uchun izchil contract
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P077 bajarilgan va tekshirilgan.
+Stack: DRF exception handler, drf-spectacular, Django CSRF handler.
+Yangi dependency/qism: code/message/fields/request_id envelope.
+Avval tushuntir: Domain error vs validation; DRFdan tashqari error; schema drift.
+Faqat shu ishlarni bajar:
+  1) Mavjud endpointlarning xato responseini normallashtir; oldingi custom 409 exceptionlarni reuse
+    qil.
+  2) Django CSRF xatosiga JSON handler; proxy 413 uchun keyingi deploy konfiguratsiyasi talabi yoz.
+  3) Pagination/Decimal/UTC/status contract va custom action schema’larini yakunla; frontend kodi
+    yozma.
+Scope cheklovi: Yangi auth usuli, status kodlarini sababsiz o‘zgartirish yoki frontend yozma.
+Qabul mezoni/tekshiruv:
+  - 400/403/404/409/415 xatolari stable code/field formati bilan qaytsin.
+  - Schema generation diff tekshir; ichki traceback responsega chiqmasin.
+Rasmiy manbalar:
+  [R22] Exceptions: https://www.django-rest-framework.org/api-guide/exceptions/
+  [R24] OpenAPI/drf-spectacular: https://drf-spectacular.readthedocs.io/en/latest/readme.html
+Natijani P000 formatida ber, progressga P078ni yoz va to‘xta.
+PROMPT OXIRI [P078]
+
+==============================================================================
+14-DARS: BACKEND SIFATI VA STAGING
+==============================================================================
+
+PROMPT BOSHI [P079]
+P079 | Permission regression va cheklangan abuse nazorati
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P078 bajarilgan va tekshirilgan.
+Stack: pytest/APIClient, DRF scoped throttle, existing auth.
+Yangi dependency/qism: Target login/account endpoint abuse config.
+Avval tushuntir: Throttle vs authorization; approximate rate limit; full permission matrix.
+Faqat shu ishlarni bajar:
+  1) Mavjud auth/account/attachment yo‘llarining permission va CSRF testlarini jamla; topilgan
+    kichik buglarni tuzat.
+  2) Login/account yaratishga tor user/IP throttle qo‘sh, anonim login uchun proxy limit talabi ham
+    docsga yoz. Django login viewiga DRF throttle avtomatik tatbiq qilinmasligini hisobga ol: login
+    uchun tor adapter/middleware, DRF accounts actioniga scoped throttle.
+  3) User+IP cached throttle DoS yoki aniq biznes kvotasiga teng emasligini ayt; quiz
+    attempt_limitni throttle bilan almashtirma.
+Scope cheklovi: WAF, yangi role, CAPTCHA integratsiyasi yoki barcha APIga tasodifiy juda past limit
+yozma.
+Qabul mezoni/tekshiruv:
+  - A/B pupil va teacher list/detail/write/file ID-almashtirish regressionlari o‘tsin.
+  - Limitdan oshishda 429 va aniq error; valid session/CSRF ishlashda davom etsin.
+Rasmiy manbalar:
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R11] Django CSRF: https://docs.djangoproject.com/en/5.2/howto/csrf/
+  [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
+  [R27] BOLA/obyekt ruxsati:
+    https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/
+  [R28] Throttle chegarasi: https://www.django-rest-framework.org/api-guide/throttling/
+Natijani P000 formatida ber, progressga P079ni yoz va to‘xta.
+PROMPT OXIRI [P079]
+
+PROMPT BOSHI [P080]
+P080 | Backend CI pipeline
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P079 bajarilgan va tekshirilgan.
+Stack: Mavjud Git hosting CI yoki GitHub Actions, Docker PostgreSQL, pytest/Ruff.
+Yangi dependency/qism: CI config, Ruff dev dependency kerak bo‘lsa.
+Avval tushuntir: Clean environment; migration drift; schema artifact; test evidence.
+Faqat shu ishlarni bajar:
+  1) Backend lint > PostgreSQL service > migrate/test > makemigrations --check > OpenAPI generation
+    pipeline yoz.
+  2) External AI/scanner chaqirig‘i testda adapter/mocks bilan; integration smoke alohida
+    belgilanadi.
+  3) Repo hostingini mavjudidan aniqlagin; yo‘q bo‘lsa portable script va namunaviy config, tashqi
+    account yaratma.
+Scope cheklovi: Frontend build, avtomatik production deploy yoki secretni yaml ichiga yozma.
+Qabul mezoni/tekshiruv:
+  - Yangi bo‘sh DB bilan pipeline o‘tsin.
+  - Broken migration/schema/test pipeline’ni fail qilsin.
+Rasmiy manbalar:
+  [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
+  [R24] OpenAPI/drf-spectacular: https://drf-spectacular.readthedocs.io/en/latest/readme.html
+  [R32] pytest-django: https://pytest-django.readthedocs.io/en/latest/
+Natijani P000 formatida ber, progressga P080ni yoz va to‘xta.
+PROMPT OXIRI [P080]
+
+PROMPT BOSHI [P081]
+P081 | Production backend container va reverse proxy
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P080 bajarilgan va tekshirilgan.
+Stack: Gunicorn, Docker, Django production settings.
+Yangi dependency/qism: Gunicorn production serveri va production settings.
+Avval tushuntir: runserver vs Gunicorn; env-based config; image va migration compatibility.
+Faqat shu ishlarni bajar:
+  1) Production backend image va Gunicorn command tayyorla; development runserver release server
+    bo‘lmasin.
+  2) DEBUG=False, ALLOWED_HOSTS, secret/env va xavfsiz Django cookie/CSRF settings; server hali
+    lokal reviewable bo‘lsin.
+  3) Nginx/TLS P081-A, private S3 P081-Bda alohida; hozir faqat backend process/image startup va
+    check --deploy natijasini yoz.
+Scope cheklovi: Nginx, S3, frontend, Kubernetes yoki tashqi production deployni shu promptda
+boshlama.
+Qabul mezoni/tekshiruv:
+  - Backend production image yangi muhitda ishga tushsin; dependency lock ishlatilgan.
+  - check --deploydagi natija, TLSga bog‘liq hali yopilmagan bandlar aniq qayd etilsin.
+Rasmiy manbalar:
+  [R25] Deployment: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+  [R30] Docker Compose: https://docs.docker.com/compose/
+Natijani P000 formatida ber, progressga P081ni yoz va to‘xta.
+PROMPT OXIRI [P081]
+
+PROMPT BOSHI [P081-A]
+P081-A | Nginx reverse proxy, TLS va edge limit
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P081 bajarilgan va tekshirilgan.
+Stack: Nginx, existing Gunicorn/Docker, Django session/CSRF.
+Yangi dependency/qism: Nginx config; TLS sertifikati uchun existing deployment sozlamalari.
+Avval tushuntir: Reverse proxy; forwarded scheme; secure cookie; body limit va CSRF origin.
+Faqat shu ishlarni bajar:
+  1) P081 backend containeriga /api/ proxy yoz: host/proxy headers va aniq origin bilan; frontend
+    static sahifa qurma.
+  2) TLS configured bo‘lsa HTTPS smoke; credential/sertifikat yo‘q bo‘lsa lokal config va aniq
+    deployment blocker. Login IP limit, upload limit va JSON 413 javob.
+  3) Private attachment katalogi Nginx public location orqali ochilmasin. Existing
+    csrf_protect/login flow proxy ortida ishlashini tekshir.
+Scope cheklovi: Frontend hosting, bucket/S3, cloud account yoki credential yaratma.
+Qabul mezoni/tekshiruv:
+  - CSRF cookie/login proxy orqali ishlasin; global CSRFni o‘chirmagin.
+  - Public file bypass yopiq; upload limit xatosi izchil.
+Rasmiy manbalar:
+  [R11] Django CSRF: https://docs.djangoproject.com/en/5.2/howto/csrf/
+  [R25] Deployment: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+  [R26] File xavfsizligi:
+    https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+  [R30] Docker Compose: https://docs.docker.com/compose/
+Natijani P000 formatida ber, progressga P081-Ani yoz va to‘xta.
+PROMPT OXIRI [P081-A]
+
+PROMPT BOSHI [P081-B]
+P081-B | Private S3-compatible storage adapteri
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P081-A bajarilgan va tekshirilgan.
+Stack: Django Storage API, django-storages/S3 client, existing private download.
+Yangi dependency/qism: Configured S3-compatible adapter; kerakli optional dependency.
+Avval tushuntir: Bucket/private key; presigned URL muddati; metadata vs bytes; CORS download bilan
+auth farqi.
+Faqat shu ishlarni bajar:
+  1) Local private adapterga parallel S3-compatible adapter yoz; existing credential envdan, bucket
+    private. Yangi tashqi account yoki bucket o‘zboshimcha yaratma.
+  2) Permission va clean checkdan keyin qisqa muddatli signed download URL. Tashqi scanner/worker
+    ham private faylni storage interface orqali o‘qisin.
+  3) Lokal backend storage bilan testni saqla; credential yo‘q bo‘lsa adapter test/mocks va aniq
+    real-integration blocker. Storage migration/delete qilma.
+Scope cheklovi: Public bucket, frontend upload widgeti, katta fayl multipart upload yoki eski faylni
+o‘chirish yo‘q.
+Qabul mezoni/tekshiruv:
+  - Begona pupil signed URL ololmasin; clean bo‘lmagan fayl ochilmasin.
+  - Real S3 smoke faqat configured test bucketda; mock natijasi real smoke deb yozilmasin.
+Rasmiy manbalar:
+  [R26] File xavfsizligi:
+    https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+  [R31] Private storage/django-storages: https://django-storages.readthedocs.io/en/latest/
+Natijani P000 formatida ber, progressga P081-Bni yoz va to‘xta.
+PROMPT OXIRI [P081-B]
+
+PROMPT BOSHI [P082]
+P082 | Health, request ID va fon ishlarini kuzatish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P081-B bajarilgan va tekshirilgan.
+Stack: Django middleware/logging, existing DB/Redis/Celery, health API.
+Yangi dependency/qism: Structured logs va health endpoints.
+Avval tushuntir: Liveness vs readiness; dependency degradation; audit vs operational log.
+Faqat shu ishlarni bajar:
+  1) /health/live/ process, /health/ready/ DB/schema holati; minimal javob, secret yoki server
+    tafsiloti oshkor bo‘lmasin.
+  2) request_id + endpoint latency + safe error log; request body/password/student text loglanmasin.
+  3) Worker heartbeat, outbox backlog/failed task va scanner/AI dependency holatini alohida kuzatish
+    command/metricsga chiqar. AI yo‘qligi asosiy readinessni o‘chirmasin.
+Scope cheklovi: Full observability platform, xususiy dashboard UI yoki pupil activity tracking
+yozma.
+Qabul mezoni/tekshiruv:
+  - DB outage readiness fail; process liveness alohida.
+  - Password/cookie/token logga tushmasin; broker failure signal bersin.
+Rasmiy manbalar:
+  [R17] Celery tasks: https://docs.celeryq.dev/en/stable/userguide/tasks.html
+  [R25] Deployment: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+Natijani P000 formatida ber, progressga P082ni yoz va to‘xta.
+PROMPT OXIRI [P082]
+
+PROMPT BOSHI [P083]
+P083 | Backup va amaliy restore mashqi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P082 bajarilgan va tekshirilgan.
+Stack: PostgreSQL backup/restore, private storage backup, runbook.
+Yangi dependency/qism: Yangi biznes paket yo‘q.
+Avval tushuntir: Backup mavjudligi vs restore ishlashi; RPO/RTO; obyekt fayllari.
+Faqat shu ishlarni bajar:
+  1) DB backup va alohida targetga restore uchun script/runbook yoz; fayl metadata va private bytes
+    izchilligini hisobga ol.
+  2) Faqat sintetik/alohida test DBga restore mashqi; ishlayotgan DBni overwrite qilma.
+  3) RPO<=1soat/RTO<=4soat loyiha nishoni, real o‘lchov va hostingdan keyin tasdiqlanishini yoz.
+Scope cheklovi: Production ma’lumotini o‘chirish, volumes down -v yoki sinovsiz “restore tayyor”
+deyish yo‘q.
+Qabul mezoni/tekshiruv:
+  - Restore nusxada course/submission/grade/attempt yozuvlari va faylga havola tekshirilsin.
+  - Backup secretlari/outputi log/repositoryga yozilmasin.
+Rasmiy manbalar:
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+  [R25] Deployment: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+Natijani P000 formatida ber, progressga P083ni yoz va to‘xta.
+PROMPT OXIRI [P083]
+
+PROMPT BOSHI [P084]
+P084 | Backend staging qabul va rollback hujjati
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P083 bajarilgan va tekshirilgan.
+Stack: Mavjud CI, Docker/Nginx/Gunicorn, HTTP client, load-test vositasi.
+Yangi dependency/qism: Faqat zarur k6/Locust variantidan bittasi, agar muhitda bo‘lmasa.
+Avval tushuntir: Staging vs production; smoke vs load; backward-compatible migration.
+Faqat shu ishlarni bajar:
+  1) Tayyor backendni lokal/staging compose’da ishga tushir; tashqi hostingga publish authorization
+    bo‘lmasa lokal reviewable natija.
+  2) Login > course > resource > submit > grade > exam > notification backend smoke. 30 concurrent
+    user uchun cheklangan synthetic profile.
+  3) Release va rollback runbook, image/version, migration compatibility va yopilmagan blockerlar.
+    AI keyingi darsdan so‘ng yana final gate ishlaydi.
+Scope cheklovi: Frontend, production rollout yoki yangi LMS funksiyasini qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Read p95<500ms/submit<1s maqsadlarini o‘lcha, kafolat deb yozma.
+  - Smoke/restore/CI natijalari va rollback qadamlari hujjatda bo‘lsin.
+Rasmiy manbalar:
+  [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
+  [R25] Deployment: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+  [R30] Docker Compose: https://docs.docker.com/compose/
+Natijani P000 formatida ber, progressga P084ni yoz va to‘xta.
+PROMPT OXIRI [P084]
+
+==============================================================================
+15-DARS: AI QORALAMA VA BACKEND QABUL
+==============================================================================
+
+PROMPT BOSHI [P085]
+P085 | AIJob va provider interfeysi
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P084 bajarilgan va tekshirilgan.
+Stack: Django ORM, PostgreSQL, DRF serializers, existing outbox.
+Yangi dependency/qism: ai app; provider adapter Protocol/interface.
+Avval tushuntir: Async job; provider boundary; prompt/resource version; mock vs real.
+Faqat shu ishlarni bajar:
+  1) AIJob(actor,course,resource_version,state,prompt_version,provider_model,tokens,error) va result
+    draft modeli.
+  2) Provider interfeysi structured question draft qaytarsin; test FakeProvider alohida,
+    productionda o‘chirilgan.
+  3) State queued/running/review/failed/approved/rejected. AIJob grade jadvaliga yozish huquqiga ega
+    emas.
+Scope cheklovi: Real model chaqirig‘i, quota, API yoki AI tutor qurma.
+Qabul mezoni/tekshiruv:
+  - Job boshqa user/coursega tegishli resource bilan yaratilmasligi keyingi API uchun invariant.
+  - FakeProvider production konfiguratsiyasida ishga tushmasin; hozir model/interfeys testi.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
+  [R29] AI va ta’lim:
+    https://www.unesco.org/en/articles/guidance-generative-ai-education-and-research
+Natijani P000 formatida ber, progressga P085ni yoz va to‘xta.
+PROMPT OXIRI [P085]
+
+PROMPT BOSHI [P086]
+P086 | AI qoralama so‘rovi, kvota va status API
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P085 bajarilgan va tekshirilgan.
+Stack: DRF GenericAPIView/Serializer, PostgreSQL atomic quota counter, outbox.
+Yangi dependency/qism: POST ai/question-drafts/ va GET ai/jobs/{id}/.
+Avval tushuntir: 202 Accepted; DB business quota vs throttle; reservation va retry.
+Faqat shu ishlarni bajar:
+  1) Teacher o‘z clean/published PDF resource_versionidan 5 savol qoralamasi so‘rasin;
+    request_id/idempotency.
+  2) Atomic daily quota rezervatsiyasi, masalan 10 job/kun; transactionda AIJob+outbox. Takror
+    request quota yoki jobni ko‘paytirmasin.
+  3) GET status faqat actor/tegishli teacher scope; muvaffaqiyatsiz job uchun quota refund
+    siyosatini aniq yoz.
+Scope cheklovi: Worker generatsiyasi, provider narxini taxmin qilish yoki approve yozma.
+Qabul mezoni/tekshiruv:
+  - Begona resource, quota oshishi va duplicate request test.
+  - 202 javobda job_id/status URL; hali tayyor savol deb qaytmasin.
+Rasmiy manbalar:
+  [R07] Generic views: https://www.django-rest-framework.org/api-guide/generic-views/
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R28] Throttle chegarasi: https://www.django-rest-framework.org/api-guide/throttling/
+Natijani P000 formatida ber, progressga P086ni yoz va to‘xta.
+PROMPT OXIRI [P086]
+
+PROMPT BOSHI [P087]
+P087 | PDFdan AI uchun cheklangan matn ajratish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P086 bajarilgan va tekshirilgan.
+Stack: pypdf yoki mavjud PDF parser, private Storage, Celery scans/ai.
+Yangi dependency/qism: Faqat text extraction adapteri.
+Avval tushuntir: Text PDF vs scan/OCR; page reference; source provenance; untrusted document.
+Faqat shu ishlarni bajar:
+  1) Faqat clean, ruxsatli PDF resource_versionidan matn ajrat; maksimum hajm/bet va 20 ming belgi
+    cap.
+  2) Har bo‘lakka sahifa va source id qo‘sh; ishonchsiz matndagi ko‘rsatmalarni tizim buyruği deb
+    olma.
+  3) Text yo‘q scan PDFga aniq unsupported/no_text; OCR/tashqi link fetchni boshlama. Resource
+    hash/versionni saqla.
+Scope cheklovi: Model chaqirish, vector DB, RAG tutor, OCR yoki savol publish yozma.
+Qabul mezoni/tekshiruv:
+  - Kontekst to‘g‘ri source/page bilan; private faylga scope tekshiruvi.
+  - Scan/katta/parse-error PDF boshqariladigan error; public URLga yuklanmasin.
+Rasmiy manbalar:
+  [R26] File xavfsizligi:
+    https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+  [R29] AI va ta’lim:
+    https://www.unesco.org/en/articles/guidance-generative-ai-education-and-research
+  [R36] pypdf text extraction: https://pypdf.readthedocs.io/en/stable/user/extract-text.html
+Natijani P000 formatida ber, progressga P087ni yoz va to‘xta.
+PROMPT OXIRI [P087]
+
+PROMPT BOSHI [P088]
+P088 | AI worker: savol qoralamasini olish va tekshirish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P087 bajarilgan va tekshirilgan.
+Stack: Celery ai queue, httpx yoki mavjud provider SDK, DRF/Pydantic JSON validation.
+Yangi dependency/qism: Bitta configured real provider adapteri; SDK kerak bo‘lsa shu bosqichda.
+Avval tushuntir: Structured output; retry/timeout; citation to‘g‘riligi vs schema validligi.
+Faqat shu ishlarni bajar:
+  1) AIJob workeri matndan 5 single-choice draft olsin; variantlar, bitta kalit, izoh va haqiqiy
+    source reference.
+  2) Provider konfiguratsiyasi/env mavjudligini tekshir. Noma’lum bo‘lsa o‘zboshimchalik bilan
+    provider tanlama: mock bilan integrationni tugat, real adapter uchun aniq konfiguratsiya
+    blockerini yoz.
+  3) Schema/count/correct_count/citation mavjudligini validate; 60s timeout/cheklangan retry. PII
+    yuborma, output avtomatik bankka kirmasin.
+Scope cheklovi: Automatic grading, teacher tasdiqsiz bank publish, tutor yoki cheksiz retry yozma.
+Qabul mezoni/tekshiruv:
+  - Malformed JSON, yo‘q source va provider timeout boshqarilsin.
+  - Duplicate event qayta ishlanganda savol drafti takrorlanmasin; real call bo‘lmasa natijani mock
+    deb yoz.
+Rasmiy manbalar:
+  [R05] Serializer: https://www.django-rest-framework.org/api-guide/serializers/
+  [R17] Celery tasks: https://docs.celeryq.dev/en/stable/userguide/tasks.html
+  [R29] AI va ta’lim:
+    https://www.unesco.org/en/articles/guidance-generative-ai-education-and-research
+  [R37] HTTPX: https://www.python-httpx.org/
+Natijani P000 formatida ber, progressga P088ni yoz va to‘xta.
+PROMPT OXIRI [P088]
+
+PROMPT BOSHI [P089]
+P089 | Teacher review, edit/reject va idempotent approve
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P088 bajarilgan va tekshirilgan.
+Stack: DRF action/serializers, PostgreSQL row lock, Question bank.
+Yangi dependency/qism: AI draft review lifecycle.
+Avval tushuntir: Human review; optimistic version; approve ayni versiya; provenance.
+Faqat shu ishlarni bajar:
+  1) Teacher draftni ko‘rsin, tahrirlasin yoki reject qilsin; draft_version va source versiyasi
+    tekshirilsin.
+  2) Approve bitta transactionda savollarni bank draftiga nusxalasin, approved state/ID mapping
+    saqlansin; exam publish teacherning keyingi amali.
+  3) Ikkinchi approve ayni savol IDlarini qaytarsin. Teacher kalit/faktni qo‘lda tekshirishi
+    talabini API/docsga yoz.
+Scope cheklovi: AI o‘zi examni nashr qilishi, baho qo‘yishi yoki pupil chatini qo‘shma.
+Qabul mezoni/tekshiruv:
+  - Stale approve yoki begona teacher rad.
+  - Duplicate approve bankda duplicate yaratmasin; approve qilinmaguncha savol bankida yo‘q.
+Rasmiy manbalar:
+  [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
+  [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+  [R16] PostgreSQL lock: https://www.postgresql.org/docs/current/explicit-locking.html
+  [R29] AI va ta’lim:
+    https://www.unesco.org/en/articles/guidance-generative-ai-education-and-research
+Natijani P000 formatida ber, progressga P089ni yoz va to‘xta.
+PROMPT OXIRI [P089]
+
+PROMPT BOSHI [P090]
+P090 | Backend yakuniy qabul va frontendga topshirish
+P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
+Kirish sharti: P089 bajarilgan va tekshirilgan.
+Stack: Mavjud backend test/CI/OpenAPI, HTTP client, AI eval fixture.
+Yangi dependency/qism: Yangi app, model yoki runtime paketi yo‘q.
+Avval tushuntir: Feature complete vs production ready; contract freeze; AI eval vs oddiy smoke.
+Faqat shu ishlarni bajar:
+  1) Barcha asosiy va qo‘shimcha promptdagi yadro uchun yakuniy acceptance matrixni bajar;
+    o‘tmaganini verified deb belgilama. AI qo‘shilgan image bilan CI/smoke qayta ishlasin.
+  2) 30 AI case: 10 normal, 10 yetarli manbasiz, 10 injection; schema/citation/scope va teacher
+    review. Real provider ishlamasa natijani faqat mock integration deb yoz, production AI o‘chiq
+    qolsin.
+  3) docs/frontend-handoff.md: auth/CSRF, endpointlar, schema, error/status, fayl oqimi, pagination,
+    UTC, misollar, test data va blockerlar. Frontendga o‘tish gate holatini yoz.
+Scope cheklovi: Yangi feature, frontend yozish yoki blockerlar bor paytda “hammasi production
+tayyor” deyish yo‘q.
+Qabul mezoni/tekshiruv:
+  - Asosiy backend oqimi, permissions, deadline/concurrency, files, broker replay va restore
+    dalillari mavjud.
+  - OpenAPI real responsega mos; tugamagan bandlar aniq. Frontend kodi va frontend dependency yo‘q.
+Rasmiy manbalar:
+  [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
+  [R24] OpenAPI/drf-spectacular: https://drf-spectacular.readthedocs.io/en/latest/readme.html
+  [R25] Deployment: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+  [R29] AI va ta’lim:
+    https://www.unesco.org/en/articles/guidance-generative-ai-education-and-research
+Natijani P000 formatida ber, progressga P090ni yoz va to‘xta.
+PROMPT OXIRI [P090]
+
+=============================================================================
+FRONTENDGA O‘TISHDAN OLDINGI BACKEND QABUL MEZONLARI
+=============================================================================
+“Backend bitdi” shu kelishilgan yadro va operator APIlarining ishlashini bildiradi.
+Bu har qanday yangi talab avtomatik bajarilgan yoki production tasdiqlangan degani
+emas. Quyidagi har band evidence bilan belgilanadi:
+
+[ ] P001-P090, P023-A...F va P081-A...B bo‘yicha progress bor; migratsiyalar clean
+    PostgreSQL bazaga qo‘llanadi. Tekshirilmagan bosqich verified deb belgilanmagan.
+[ ] Accounts: operator login beradi/reset qiladi; pupil birinchi parolini
+    almashtiradi; login/logout/me/CSRF va session bekor qilish sinovdan o‘tgan.
+[ ] Akademik katalog: yil/chorak/sinf/fan/course; teacher assignment, pupil
+    membership/transfer va course roster APIlari mavjud. Frontend bu ishlar uchun
+    DBga yozishi yoki seed ishlatishi talab qilinmaydi.
+[ ] Teacher topic/resource/assignment publish qiladi; pupil tegishlisini ko‘radi.
+[ ] PDF/rasm clean scan’dan keyin, permission bilan olinadi; bucket private.
+    Pending/failed scan fayli topshirilmaydi. Video/link ruxsatli host bilan.
+[ ] Vazifa rubric/max ball/deadline bilan; draft > submit > return > revision 2.
+    Immutable history, stale version va persistent idempotency ishlaydi.
+[ ] Teacher criterion bo‘yicha baho beradi/e’lon qiladi; pupil o‘z published
+    natijasini ko‘radi; regrade auditi va null/zero farqi saqlangan.
+[ ] Jadval to‘qnashuvi, sana exceptioni, real session, davomat va tuzatish auditi.
+[ ] Outbox+worker replay, in-app notification, deadline reminder dedup va scan.
+[ ] Savol banki single-choice/essay; exam snapshot; start/resume/autosave/finish,
+    manual review/release va expiry. Pupil hech qachon yashirin kalitni olmaydi.
+[ ] Pupil/teacher dashboard, scoped filter, pagination, query profiling va
+    timetable cache; Redis outage asosiy baho/javobni yo‘qotmaydi.
+[ ] API schema, error envelope, data types, statuses, auth/file examplelar tayyor.
+[ ] Backend regression/CI, private file/permission/CSRF/concurrency testlari o‘tgan.
+[ ] Staging runbook, health/log redaction, backup/restore dalili va rollback bor.
+[ ] AI feature flag bilan: real provider tayyor bo‘lsa worker+eval ishlaydi;
+    bo‘lmasa integration/mock chegarasi ochiq, production AI disabled. AI yo‘qligi
+    LMS yadrosini bloklamaydi. AI-enabled qabul alohida yakunlanishi mumkin.
+[ ] AI real ishlatilsa teacher review/approve, quota, source/version va 30-case
+    eval natijalari bor; mock-only natija real model sifati sifatida berilmaydi.
+[ ] docs/frontend-handoff.md va yakuniy OpenAPI tayyor. O‘tmagan majburiy backend
+    bandi bo‘lsa frontend implementatsiyasini boshlashdan avval tuzatiladi.
+
+KEYINGI FRONTENDGA BERILADIGAN CONTRACT
+-------------------------------------
+1. API base URL va versiya; OpenAPI schema JSON/YAML manzili.
+2. CSRF olish > session login > /me > password-change/logout ketma-ketligi.
+3. Pupil/teacher/capability matrix; endpoint va field write/read chegaralari.
+4. Course/topic/resource/assignment, draft/submit/return/grade payloadlari.
+5. Upload > pending_scan > clean > draft attach > submit > receipt oqimi.
+6. Exam state, server_now/expires_at, autosave version/saved_at, result release.
+7. Jadval/davomat va announcement/notification kontraktlari.
+8. Error code/fields/request_id, 403/404/409/413/415/429 uchun namunalar.
+9. Pagination/filter/ordering, Decimal string, aware UTC va local display qoidasi.
+10. AI job 202/status/review/approve va disabled/failed holatlari.
+11. Sintetik test hisoblarini xavfsiz olish yo‘li; real parollarni hujjatga yozmaslik.
+12. Holatlar: loading/empty/error/forbidden/saved/processing; bu yerda faqat
+    APIga mos UX talablari, frontend kodi emas.
+
+ATAYLAB KEYINGA QOLDIRILGAN KENGAYTMALAR
+--------------------------------------
+RAG/pupil tutor, pgvector, individual deadline UI/API, vaznli rasmiy chorak/yillik
+hisob va 5 ballga o‘tkazish nizomi, yillik sinf promotion, CSV bulk import,
+SCORM/LTI, qo‘shimcha test turlari, email/SMS/push, parent roli, multi-tenant SaaS,
+automatik jadval solveri va video transcode. Ularning frontendini ham backend
+qoidalari/contractlari alohida yozilmaguncha qurish boshlanmaydi.
+
+PROMPT NAZORATI UCHUN QISQA QAYTA YO‘NALTIRISH
+-------------------------------------------
+AI scope’dan chiqsa quyidagini yuboring:
+“Joriy prompt ID: [ID]. Faqat undagi scope’ga qayt. Qo‘shni modullar yoki
+frontendni boshlama. Mavjud diffni ko‘r; zarur bo‘lmagan o‘zgarishlarni ko‘rsat,
+foydalanuvchi yozgan kodni o‘chirma. Qabul mezonlarini tekshir, natija va blocker
+bilan shu promptni yakunla. Keyingi promptni men alohida beraman.”
+
+Bir tushuncha noma’lum bo‘lsa:
+“Mode=study. Joriy prompt: [ID]. Uning yangi texnologiyasini sodda misol bilan
+izohla, DRF qismi va biznes service qismini ajrat. Kod fayllarini o‘zgartirma.
+3 ta kichik mashq ber. Implementatsiya shu ID bilan keyin qilinadi.”
+
+RASMIY MANBALAR
+==============
+Tekshiruv: 16.10.2026. Asosiy arxitektura oldingi PDF bilan bir xil; bu faylning
+qo‘shimchasi - backend-only, kichik prompt scope’i va frontendga topshirish gate’i.
+Quyida rasmiy hujjatlar bor. Aniq SDK/provider/versiya integratsiyasi ayni promptni
+bajarishda o‘sha muhit va joriy rasmiy hujjat bilan tekshiriladi.
+
+[R01] Django versiya/support
+https://www.djangoproject.com/download/
+
+[R02] Custom User
+https://docs.djangoproject.com/en/5.2/topics/auth/customizing/
+
+[R03] DRF Request
+https://www.django-rest-framework.org/api-guide/requests/
+
+[R04] DRF Response/status
+https://www.django-rest-framework.org/api-guide/responses/
+
+[R05] Serializer
+https://www.django-rest-framework.org/api-guide/serializers/
+
+[R06] Field va relations
+https://www.django-rest-framework.org/api-guide/relations/
+
+[R07] Generic views
+https://www.django-rest-framework.org/api-guide/generic-views/
+
+[R08] ViewSet/router
+https://www.django-rest-framework.org/api-guide/viewsets/
+
+[R09] Authentication
+https://www.django-rest-framework.org/api-guide/authentication/
+
+[R10] Permissions
+https://www.django-rest-framework.org/api-guide/permissions/
+
+[R11] Django CSRF
+https://docs.djangoproject.com/en/5.2/howto/csrf/
+
+[R12] Parser
+https://www.django-rest-framework.org/api-guide/parsers/
+
+[R13] Validators
+https://www.django-rest-framework.org/api-guide/validators/
+
+[R14] Transactions
+https://docs.djangoproject.com/en/5.2/topics/db/transactions/
+
+[R15] PostgreSQL constraint
+https://www.postgresql.org/docs/current/ddl-constraints.html
+
+[R16] PostgreSQL lock
+https://www.postgresql.org/docs/current/explicit-locking.html
+
+[R17] Celery tasks
+https://docs.celeryq.dev/en/stable/userguide/tasks.html
+
+[R18] Celery Beat
+https://docs.celeryq.dev/en/stable/userguide/periodic-tasks.html
+
+[R19] Redis tushunchalari
+https://redis.io/docs/latest/develop/
+
+[R20] Filtering
+https://www.django-rest-framework.org/api-guide/filtering/
+
+[R21] Pagination
+https://www.django-rest-framework.org/api-guide/pagination/
+
+[R22] Exceptions
+https://www.django-rest-framework.org/api-guide/exceptions/
+
+[R23] Testing
+https://www.django-rest-framework.org/api-guide/testing/
+
+[R24] OpenAPI/drf-spectacular
+https://drf-spectacular.readthedocs.io/en/latest/readme.html
+
+[R25] Deployment
+https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
+
+[R26] File xavfsizligi
+https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
+
+[R27] BOLA/obyekt ruxsati
+https://owasp.org/API-Security/editions/2023/en/0xa1-broken-object-level-authorization/
+
+[R28] Throttle chegarasi
+https://www.django-rest-framework.org/api-guide/throttling/
+
+[R29] AI va ta’lim
+https://www.unesco.org/en/articles/guidance-generative-ai-education-and-research
+
+[R30] Docker Compose
+https://docs.docker.com/compose/
+
+[R31] Private storage/django-storages
+https://django-storages.readthedocs.io/en/latest/
+
+[R32] pytest-django
+https://pytest-django.readthedocs.io/en/latest/
+
+[R33] Django constraint API
+https://docs.djangoproject.com/en/5.2/ref/models/constraints/
+
+[R34] Django cache
+https://docs.djangoproject.com/en/5.2/topics/cache/
+
+[R35] Django password boshqaruvi
+https://docs.djangoproject.com/en/5.2/topics/auth/passwords/
+
+[R36] pypdf text extraction
+https://pypdf.readthedocs.io/en/stable/user/extract-text.html
+
+[R37] HTTPX
+https://www.python-httpx.org/
+
