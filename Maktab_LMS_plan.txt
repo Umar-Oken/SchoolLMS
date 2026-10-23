@@ -42,11 +42,10 @@ Avval u nima, qaysi muammoni hal qiladi va nega kerakligi tushuntiriladi.
 
 ASOSIY TEXNOLOGIYALAR: NIMA UCHUN VA QACHON
 -----------------------------------------
-1-dars: Python 3.12, Django 5.2 LTS liniyasi, mos DRF, PostgreSQL/psycopg,
-Docker Compose, pytest-django, drf-spectacular.
+1-dars: Python 3.12, Django 6.1 liniyasi (LTS emas), mos DRF, PostgreSQL/psycopg,
+pytest-django, drf-spectacular.
 - Django: ORM, auth, migratsiya, session; DRF: HTTP/JSON va API contract.
 - PostgreSQL: doimiy ma’lumot, FK/unique/check, transaction va row lock.
-- Docker: bir xil muhit; Compose: servislarni birgalikda ishga tushirish.
 - pytest: biznes oqimi uchun test; OpenAPI: keyingi frontend bilan contract.
 Python/Django versiya tanlovi mavjud repo va supportga qarab lock qilinadi;
 “eng yangi versiya” yoki “latest” tagi ko‘r-ko‘rona ishlatilmaydi.
@@ -106,7 +105,7 @@ Sen senior Python/Django backend engineer va o‘quv mentorisan. Biz Django MVTn
 biladigan o‘quvchilar bilan maktab LMS backendini quramiz. Faqat pupil va teacher
 roli bor. Hozir frontend yozilmaydi. Ushbu fayldagi arxitektura kelishuvi, prompt
 IDlari, dependencylar va cheklovlarga amal qil.
-Texnik kelishuv: Python 3.12 + Django 5.2 LTS liniyasi + mos DRF + PostgreSQL.
+Texnik kelishuv: Python 3.12 + Django 6.1 liniyasi (LTS emas) + mos DRF + PostgreSQL.
 Mavjud mos stackni sababsiz almashtirma. Session auth va CSRF-himoyalangan login;
 ommaviy signup/JWT hozir yo‘q. manage_accounts/manage_academics tanlangan teacher
 capabilitylari, uchinchi biznes role emas. Global IsAuthenticated; queryset scope,
@@ -155,7 +154,7 @@ PROMPTLAR MUNDARIJASI
 ====================
 
 01-DARS. Muhit, custom user va ilk API
-Maqsad: Docker, Django, PostgreSQL, HTTP, DRF va test nima uchun kerakligini tushunish.
+Maqsad: Django, PostgreSQL, HTTP, DRF va test nima uchun kerakligini tushunish.
   P001: Repository auditi va backend chegarasini belgilash
   P002: Django loyihasini migratsiyasiz ochish
   P003: Birinchi migratsiyadan oldin custom User
@@ -281,7 +280,7 @@ Maqsad: Progress, filtr, sahifalash, query profiling va cache.
 Maqsad: Security regression, CI, deploy, health va backup/restore.
   P079: Permission regression va cheklangan abuse nazorati
   P080: Backend CI pipeline
-  P081: Production backend container va reverse proxy
+  P081: Production backend: Gunicorn va production settings
   P081-A: Nginx reverse proxy, TLS va edge limit
   P081-B: Private S3-compatible storage adapteri
   P082: Health, request ID va fon ishlarini kuzatish
@@ -320,7 +319,7 @@ Faqat shu ishlarni bajar:
     o‘chirma.
   2) docs/backend-scope.md: bir maktab, pupil/teacher, backend-only, session auth va 15 dars
     chegarasi. docs/backend-progress.md uchun prompt holatlari shabloni yarat.
-  3) Python 3.12 + Django 5.2 LTS liniyasi va mos DRF tayanchini taklif qil; mavjud mos versiyani
+  3) Python 3.12 + Django 6.1 liniyasi (LTS emas) va mos DRF tayanchini taklif qil; mavjud mos versiyani
     sababsiz almashtirma. Paket versiyalarini real muhitga qarab keyin lock qil.
 Scope cheklovi: Biznes model, login, Redis, Celery yoki frontend qurma.
 Qabul mezoni/tekshiruv:
@@ -344,7 +343,7 @@ Faqat shu ishlarni bajar:
   2) .env.example, .gitignore va reproducible dependency lock qo‘sh. Secretlarning haqiqiy qiymatini
     log/commitga yozma.
   3) Hozir migrate qilma: custom User keyingi promptda birinchi migratsiyadan oldin sozlanadi.
-Scope cheklovi: Default User bilan migrate, PostgreSQL container, DRF endpoint yoki Celery qo‘shma.
+Scope cheklovi: Default User bilan migrate, PostgreSQL sozlamasi, DRF endpoint yoki Celery qo‘shma.
 Qabul mezoni/tekshiruv:
   - Import/settings check ishlasin; DB talab qiladigan buyruqni hali bajarmaslik sababini yoz.
   - Lockfile va ishga tushirish komandasi ko‘rsatilsin.
@@ -383,23 +382,22 @@ PROMPT BOSHI [P004]
 P004 | PostgreSQL bilan birinchi migrate
 P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
 Kirish sharti: P003 bajarilgan va tekshirilgan.
-Stack: Docker Compose, PostgreSQL, Django, psycopg.
-Yangi dependency/qism: PostgreSQL xizmati va psycopg; mavjud bo‘lsa qayta o‘rnatma.
-Avval tushuntir: Container/image/volume; service hostname va localhost; migration DBga nima qiladi.
+Stack: PostgreSQL, Django, psycopg.
+Yangi dependency/qism: PostgreSQL ulanish sozlamasi va psycopg; mavjud bo‘lsa qayta o‘rnatma.
+Avval tushuntir: Lokal PostgreSQL va masofaviy DB ulanishi; .env parametrlari; migration DBga nima qiladi.
 Faqat shu ishlarni bajar:
-  1) Compose’da postgres va uning persistent named volume/healthcheckini sozla. Backend container
-    bo‘lsa DB host postgres; hostdan ishlasa boshqa host konfiguratsiyasini tushuntir.
+  1) Lokal o‘rnatilgan PostgreSQL servisiga yoki mavjud masofaviy DBga .env parametrlaridan
+    ulanishni sozla. Host, port, DB nomi, user va parol qiymatlari muhitdan boshqarilsin.
   2) Env orqali DBni ulab, custom User tayyorligini tekshirgan holda migrate qil. .env.examplega
     faqat namuna qo‘sh.
-  3) Lokal ishga tushirish va to‘xtatish komandalarini READMEga yoz. Data volume’ni o‘chirish bu
-    jarayonning bir qismi emas.
+  3) Lokal DB servisi yoki masofaviy DB uchun ulanish va tekshirish komandalarini READMEga yoz.
+    Ma’lumotlar saqlanishini PostgreSQL bazasining o‘zi ta’minlaydi.
 Scope cheklovi: Redis, Celery, Nginx, production hosting yoki biznes API qurma.
 Qabul mezoni/tekshiruv:
   - DB connection va migrate muvaffaqiyati tekshirilsin.
-  - Container qayta ishga tushganda oldingi yozuv saqlanishi ko‘rsatilsin.
+  - PostgreSQL qayta ishga tushgandan keyin oldingi yozuv saqlanishi ko‘rsatilsin.
 Rasmiy manbalar:
   [R15] PostgreSQL constraint: https://www.postgresql.org/docs/current/ddl-constraints.html
-  [R30] Docker Compose: https://docs.docker.com/compose/
 Natijani P000 formatida ber, progressga P004ni yoz va to‘xta.
 PROMPT OXIRI [P004]
 
@@ -1786,11 +1784,13 @@ PROMPT BOSHI [P055]
 P055 | Redis va Celeryni alohida tushunib ulash
 P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
 Kirish sharti: P054 bajarilgan va tekshirilgan.
-Stack: Redis, Celery, Docker Compose, Django.
-Yangi dependency/qism: redis broker, worker va bitta beat service.
+Stack: Redis, Celery, Django.
+Yangi dependency/qism: Redis broker, Celery worker va bitta Beat processi.
 Avval tushuntir: Cache vs broker; producer/queue/worker; Beat worker emas; at-least-once.
 Faqat shu ishlarni bajar:
-  1) Composega Redis, worker va bitta Beat qo‘sh; app discovery va env konfiguratsiya.
+  1) Redis, worker va Beatni lokal servislar yoki operatsion tizim processlari sifatida ishga
+    tushirishni ko‘rsat; Redis konfiguratsiyasi, worker va Beatni alohida ishga tushirish
+    komandalarini, app discovery va env konfiguratsiyasini yoz.
   2) Bitta zararsiz diagnostic task bilan worker ishlashini tekshir. DB biznes ma’lumotini Redisga
     ko‘chirma.
   3) Default/scans/ai queue nomlarini konfiguratsiyada belgila; production cache/broker ajratilishi
@@ -1803,7 +1803,6 @@ Rasmiy manbalar:
   [R17] Celery tasks: https://docs.celeryq.dev/en/stable/userguide/tasks.html
   [R18] Celery Beat: https://docs.celeryq.dev/en/stable/userguide/periodic-tasks.html
   [R19] Redis tushunchalari: https://redis.io/docs/latest/develop/
-  [R30] Docker Compose: https://docs.docker.com/compose/
 Natijani P000 formatida ber, progressga P055ni yoz va to‘xta.
 PROMPT OXIRI [P055]
 
@@ -2394,7 +2393,7 @@ PROMPT BOSHI [P080]
 P080 | Backend CI pipeline
 P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
 Kirish sharti: P079 bajarilgan va tekshirilgan.
-Stack: Mavjud Git hosting CI yoki GitHub Actions, Docker PostgreSQL, pytest/Ruff.
+Stack: Mavjud Git hosting CI yoki GitHub Actions, PostgreSQL, pytest/Ruff.
 Yangi dependency/qism: CI config, Ruff dev dependency kerak bo‘lsa.
 Avval tushuntir: Clean environment; migration drift; schema artifact; test evidence.
 Faqat shu ishlarni bajar:
@@ -2404,6 +2403,8 @@ Faqat shu ishlarni bajar:
     belgilanadi.
   3) Repo hostingini mavjudidan aniqlagin; yo‘q bo‘lsa portable script va namunaviy config, tashqi
     account yaratma.
+  CI test DB uchun GitHub Actions tomonidan boshqariladigan PostgreSQL xizmatidan foydalanish
+  majburiy emas; mavjud CI imkoniyati yoki test PostgreSQL konfiguratsiyasidan foydalan.
 Scope cheklovi: Frontend build, avtomatik production deploy yoki secretni yaml ichiga yozma.
 Qabul mezoni/tekshiruv:
   - Yangi bo‘sh DB bilan pipeline o‘tsin.
@@ -2416,27 +2417,26 @@ Natijani P000 formatida ber, progressga P080ni yoz va to‘xta.
 PROMPT OXIRI [P080]
 
 PROMPT BOSHI [P081]
-P081 | Production backend container va reverse proxy
+P081 | Production backend: Gunicorn va production settings
 P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
 Kirish sharti: P080 bajarilgan va tekshirilgan.
-Stack: Gunicorn, Docker, Django production settings.
+Stack: Gunicorn, Django production settings.
 Yangi dependency/qism: Gunicorn production serveri va production settings.
-Avval tushuntir: runserver vs Gunicorn; env-based config; image va migration compatibility.
+Avval tushuntir: runserver vs Gunicorn; env-based config; dependency va migration compatibility.
 Faqat shu ishlarni bajar:
-  1) Production backend image va Gunicorn command tayyorla; development runserver release server
-    bo‘lmasin.
+  1) Production backend uchun Gunicorn komandasi tayyorla; development runserver release server
+    bo‘lmasin. Gunicorn systemd, Supervisor yoki hosting process manager orqali ishlashi mumkin.
   2) DEBUG=False, ALLOWED_HOSTS, secret/env va xavfsiz Django cookie/CSRF settings; server hali
     lokal reviewable bo‘lsin.
-  3) Nginx/TLS P081-A, private S3 P081-Bda alohida; hozir faqat backend process/image startup va
+  3) Nginx/TLS P081-A, private S3 P081-Bda alohida; hozir faqat backend process ishga tushishi va
     check --deploy natijasini yoz.
 Scope cheklovi: Nginx, S3, frontend, Kubernetes yoki tashqi production deployni shu promptda
 boshlama.
 Qabul mezoni/tekshiruv:
-  - Backend production image yangi muhitda ishga tushsin; dependency lock ishlatilgan.
+  - Backend production process yangi muhitda ishga tushsin; dependency lock ishlatilgan.
   - check --deploydagi natija, TLSga bog‘liq hali yopilmagan bandlar aniq qayd etilsin.
 Rasmiy manbalar:
   [R25] Deployment: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-  [R30] Docker Compose: https://docs.docker.com/compose/
 Natijani P000 formatida ber, progressga P081ni yoz va to‘xta.
 PROMPT OXIRI [P081]
 
@@ -2444,11 +2444,11 @@ PROMPT BOSHI [P081-A]
 P081-A | Nginx reverse proxy, TLS va edge limit
 P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
 Kirish sharti: P081 bajarilgan va tekshirilgan.
-Stack: Nginx, existing Gunicorn/Docker, Django session/CSRF.
+Stack: Nginx, mavjud Gunicorn backend, Django session/CSRF.
 Yangi dependency/qism: Nginx config; TLS sertifikati uchun existing deployment sozlamalari.
 Avval tushuntir: Reverse proxy; forwarded scheme; secure cookie; body limit va CSRF origin.
 Faqat shu ishlarni bajar:
-  1) P081 backend containeriga /api/ proxy yoz: host/proxy headers va aniq origin bilan; frontend
+  1) P081 Gunicorn backendiga /api/ proxy yoz: host/proxy headers va aniq origin bilan; frontend
     static sahifa qurma.
   2) TLS configured bo‘lsa HTTPS smoke; credential/sertifikat yo‘q bo‘lsa lokal config va aniq
     deployment blocker. Login IP limit, upload limit va JSON 413 javob.
@@ -2463,7 +2463,6 @@ Rasmiy manbalar:
   [R25] Deployment: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
   [R26] File xavfsizligi:
     https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html
-  [R30] Docker Compose: https://docs.docker.com/compose/
 Natijani P000 formatida ber, progressga P081-Ani yoz va to‘xta.
 PROMPT OXIRI [P081-A]
 
@@ -2530,8 +2529,7 @@ Faqat shu ishlarni bajar:
     izchilligini hisobga ol.
   2) Faqat sintetik/alohida test DBga restore mashqi; ishlayotgan DBni overwrite qilma.
   3) RPO<=1soat/RTO<=4soat loyiha nishoni, real o‘lchov va hostingdan keyin tasdiqlanishini yoz.
-Scope cheklovi: Production ma’lumotini o‘chirish, volumes down -v yoki sinovsiz “restore tayyor”
-deyish yo‘q.
+Scope cheklovi: Production ma’lumotini o‘chirish yoki sinovsiz “restore tayyor” deyish yo‘q.
 Qabul mezoni/tekshiruv:
   - Restore nusxada course/submission/grade/attempt yozuvlari va faylga havola tekshirilsin.
   - Backup secretlari/outputi log/repositoryga yozilmasin.
@@ -2545,15 +2543,16 @@ PROMPT BOSHI [P084]
 P084 | Backend staging qabul va rollback hujjati
 P000 umumiy ko‘rsatmasi va arxitektura kelishuvini qo‘lla.
 Kirish sharti: P083 bajarilgan va tekshirilgan.
-Stack: Mavjud CI, Docker/Nginx/Gunicorn, HTTP client, load-test vositasi.
+Stack: Mavjud CI, Gunicorn/Nginx, HTTP client, load-test vositasi.
 Yangi dependency/qism: Faqat zarur k6/Locust variantidan bittasi, agar muhitda bo‘lmasa.
 Avval tushuntir: Staging vs production; smoke vs load; backward-compatible migration.
 Faqat shu ishlarni bajar:
-  1) Tayyor backendni lokal/staging compose’da ishga tushir; tashqi hostingga publish authorization
+  1) Tayyor backendni mavjud lokal yoki staging muhitida Gunicorn/Nginx orqali ishga tushir;
+    tashqi hostingga publish authorization
     bo‘lmasa lokal reviewable natija.
   2) Login > course > resource > submit > grade > exam > notification backend smoke. 30 concurrent
     user uchun cheklangan synthetic profile.
-  3) Release va rollback runbook, image/version, migration compatibility va yopilmagan blockerlar.
+  3) Release va rollback runbook, release version, migration compatibility va yopilmagan blockerlar.
     AI keyingi darsdan so‘ng yana final gate ishlaydi.
 Scope cheklovi: Frontend, production rollout yoki yangi LMS funksiyasini qo‘shma.
 Qabul mezoni/tekshiruv:
@@ -2562,7 +2561,6 @@ Qabul mezoni/tekshiruv:
 Rasmiy manbalar:
   [R23] Testing: https://www.django-rest-framework.org/api-guide/testing/
   [R25] Deployment: https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-  [R30] Docker Compose: https://docs.docker.com/compose/
 Natijani P000 formatida ber, progressga P084ni yoz va to‘xta.
 PROMPT OXIRI [P084]
 
@@ -2714,7 +2712,7 @@ Yangi dependency/qism: Yangi app, model yoki runtime paketi yo‘q.
 Avval tushuntir: Feature complete vs production ready; contract freeze; AI eval vs oddiy smoke.
 Faqat shu ishlarni bajar:
   1) Barcha asosiy va qo‘shimcha promptdagi yadro uchun yakuniy acceptance matrixni bajar;
-    o‘tmaganini verified deb belgilama. AI qo‘shilgan image bilan CI/smoke qayta ishlasin.
+    o‘tmaganini verified deb belgilama. AI qo‘shilgan o‘zgarishlar bilan CI/smoke qayta ishlasin.
   2) 30 AI case: 10 normal, 10 yetarli manbasiz, 10 injection; schema/citation/scope va teacher
     review. Real provider ishlamasa natijani faqat mock integration deb yoz, production AI o‘chiq
     qolsin.
@@ -2904,9 +2902,6 @@ https://www.django-rest-framework.org/api-guide/throttling/
 [R29] AI va ta’lim
 https://www.unesco.org/en/articles/guidance-generative-ai-education-and-research
 
-[R30] Docker Compose
-https://docs.docker.com/compose/
-
 [R31] Private storage/django-storages
 https://django-storages.readthedocs.io/en/latest/
 
@@ -2927,4 +2922,3 @@ https://pypdf.readthedocs.io/en/stable/user/extract-text.html
 
 [R37] HTTPX
 https://www.python-httpx.org/
-

@@ -31,3 +31,14 @@ fabric.properties
 .idea
 .venv
 .env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.log
+*.sqlite3
+*.sqlite3-*
+.DS_Store
+Thumbs.db
+media/

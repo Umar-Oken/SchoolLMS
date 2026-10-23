@@ -12,24 +12,44 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+from django.core.management.utils import get_random_secret_key
 from dotenv import load_dotenv
-
-load_dotenv()
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 
+DEBUG_VALUE = os.environ.get("DJANGO_DEBUG", "true").strip().lower()
+if DEBUG_VALUE not in {"true", "false"}:
+    raise ImproperlyConfigured("DJANGO_DEBUG must be either 'true' or 'false'.")
+DEBUG = DEBUG_VALUE == "true"
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = get_random_secret_key()
+    else:
+        raise ImproperlyConfigured(
+            "DJANGO_SECRET_KEY must be set when DEBUG is false."
+        )
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-&0_-z6(x86378mt%xa4vt4(ij%2it=%@*&)esq1_c*5!_)eo*i'
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS_VALUE = os.environ.get("DJANGO_ALLOWED_HOSTS")
+if not DEBUG and not ALLOWED_HOSTS_VALUE:
+    raise ImproperlyConfigured(
+        "DJANGO_ALLOWED_HOSTS must be explicitly set when DEBUG is false."
+    )
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in (
+        ALLOWED_HOSTS_VALUE or "localhost,127.0.0.1,[::1]"
+    ).split(",")
+    if host.strip()
+]
+if not DEBUG and not ALLOWED_HOSTS:
+    raise ImproperlyConfigured(
+        "DJANGO_ALLOWED_HOSTS must be set when DEBUG is false."
+    )
 
 
 # Application definition
@@ -41,6 +61,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'accounts.apps.AccountsConfig',
+    'academics.apps.AcademicsConfig',
     'apps.apps.AppsConfig',
     'rest_framework',
     'drf_spectacular',
@@ -75,6 +97,8 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'root.wsgi.application'
 
+AUTH_USER_MODEL = 'accounts.User'
+
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
@@ -89,17 +113,26 @@ SPECTACULAR_SETTINGS = {
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
+DB_ENGINE = os.environ.get(
+    "DB_ENGINE",
+    "django.db.backends.postgresql",
+)
+
+DB_NAME = os.environ.get("DB_NAME", "")
+
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql_psycopg2',
-        'NAME': os.getenv("DB_NAME"),
-        'USER': os.getenv("DB_USER"),
-        'PASSWORD': os.getenv("DB_PASSWORD"),
-        'HOST': os.getenv("DB_HOST"),
-        'PORT': os.getenv("DB_PORT"),
+    "default": {
+        "ENGINE": DB_ENGINE,
+        "NAME": DB_NAME,
+        "USER": os.environ.get("DB_USER", "postgres"),
+        "PASSWORD": os.environ.get("DB_PASSWORD", ""),
+        "HOST": os.environ.get("DB_HOST", "localhost"),
+        "PORT": os.environ.get("DB_PORT", "5432"),
+        "CONN_MAX_AGE": int(
+            os.environ.get("DB_CONN_MAX_AGE", "60")
+        ),
     }
 }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/6.1/ref/settings/#auth-password-validators
