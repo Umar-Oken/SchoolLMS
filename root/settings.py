@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     'apps.apps.AppsConfig',
     'rest_framework',
     'drf_spectacular',
+    'drf_spectacular_sidecar',
 ]
 
 MIDDLEWARE = [
@@ -107,6 +108,7 @@ SPECTACULAR_SETTINGS = {
     'TITLE': 'School LMS API',
     'DESCRIPTION': 'API schema for the School LMS project.',
     'VERSION': '1.0.0',
+    'REDOC_DIST': 'SIDECAR',
 }
 
 
@@ -168,7 +170,7 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
