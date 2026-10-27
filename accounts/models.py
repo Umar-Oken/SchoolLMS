@@ -39,3 +39,48 @@ class User(AbstractUser):
                 name='accounts_user_role_valid',
             ),
         ]
+        permissions = [
+            ('manage_accounts', 'Can manage accounts'),
+            ('manage_academics', 'Can manage academics'),
+        ]
+
+
+class CapabilityGrantAudit(models.Model):
+    actor = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.PROTECT,
+        related_name='capability_grants_made',
+    )
+    target = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.PROTECT,
+        related_name='capability_grant_audits',
+    )
+    capability = models.CharField(max_length=32)
+    reason = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('created_at', 'pk')
+
+
+class AccountLifecycleAudit(models.Model):
+    class Action(models.TextChoices):
+        CREATED = 'created', 'Created'
+        PASSWORD_RESET = 'password_reset', 'Password reset'
+
+    actor = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.PROTECT,
+        related_name='account_lifecycle_actions',
+    )
+    target = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.PROTECT,
+        related_name='account_lifecycle_audits',
+    )
+    action = models.CharField(max_length=20, choices=Action.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ('created_at', 'pk')

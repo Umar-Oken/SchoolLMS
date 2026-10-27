@@ -1,4 +1,5 @@
 from datetime import date
+from types import SimpleNamespace
 
 import secrets
 from io import StringIO
@@ -30,6 +31,7 @@ from academics.services import (
     enroll_pupil_in_class,
     replace_course_teacher,
 )
+from academics.views import IsCoursePupil, IsCourseTeacher
 
 
 @pytest.fixture
@@ -736,8 +738,422 @@ def test_teacher_course_list_and_detail_are_assignment_scoped(course_api_data):
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize(
+    ('user_key', 'own_course_key', 'other_course_key'),
+    [
+        ('pupil_a', 'course_a', 'course_b'),
+        ('pupil_b', 'course_b', 'course_a'),
+        ('teacher_a', 'course_a', 'course_b'),
+        ('teacher_b', 'course_b', 'course_a'),
+    ],
+)
+def test_course_list_and_detail_reject_ids_from_other_users(
+    course_api_data,
+    user_key,
+    own_course_key,
+    other_course_key,
+):
+    client = APIClient()
+    client.force_authenticate(user=course_api_data[user_key])
+    own_course_id = course_api_data[own_course_key].pk
+    other_course_id = course_api_data[other_course_key].pk
+
+    list_response = client.get('/api/v1/courses/')
+    own_detail = client.get(f'/api/v1/courses/{own_course_id}/')
+    swapped_detail = client.get(f'/api/v1/courses/{other_course_id}/')
+
+    assert list_response.status_code == status.HTTP_200_OK
+    assert own_course_id in {item['id'] for item in list_response.data}
+    assert other_course_id not in {item['id'] for item in list_response.data}
+    assert own_detail.status_code == status.HTTP_200_OK
+    assert swapped_detail.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.django_db
+def test_pupil_can_read_course_with_closed_enrollment_but_cannot_write(
+    course_api_data,
+):
+    pupil = course_api_data['pupil_a']
+    course = course_api_data['course_a']
+    enrollment = Enrollment.objects.get(pupil=pupil, course=course)
+    permission = IsCoursePupil()
+    write_request = SimpleNamespace(user=pupil, method='PATCH')
+    assert permission.has_object_permission(write_request, None, course)
+
+    enrollment.status = MembershipStatus.CLOSED
+    enrollment.end_date = date(2027, 1, 31)
+    enrollment.save(update_fields=['status', 'end_date'])
+    client = APIClient()
+    client.force_authenticate(user=pupil)
+    read_request = SimpleNamespace(user=pupil, method='GET')
+
+    assert client.get('/api/v1/courses/').data[0]['id'] == course.pk
+    assert client.get(f'/api/v1/courses/{course.pk}/').status_code == status.HTTP_200_OK
+    assert permission.has_object_permission(read_request, None, course)
+    assert not permission.has_object_permission(write_request, None, course)
+
+
+@pytest.mark.django_db
+def test_teacher_history_is_readable_but_closed_or_non_grading_assignment_cannot_write(
+    course_api_data,
+):
+    teacher = course_api_data['teacher_a']
+    course = course_api_data['course_a']
+    old_assignment = TeachingAssignment.objects.get(teacher=teacher, course=course)
+    old_assignment.can_grade = True
+    old_assignment.save(update_fields=['can_grade'])
+    permission = IsCourseTeacher()
+    write_request = SimpleNamespace(user=teacher, method='PATCH')
+    assert permission.has_object_permission(write_request, None, course)
+
+    close_teaching_assignment(old_assignment, date(2027, 1, 31))
+    assign_teacher(course, teacher, date(2027, 2, 1), can_grade=False)
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+    read_request = SimpleNamespace(user=teacher, method='GET')
+
+    assert client.get('/api/v1/courses/').data[0]['id'] == course.pk
+    assert client.get(f'/api/v1/courses/{course.pk}/').status_code == status.HTTP_200_OK
+    assert permission.has_object_permission(read_request, None, course)
+    assert not permission.has_object_permission(write_request, None, course)
+
+
+@pytest.mark.django_db
 def test_course_endpoints_reject_anonymous_requests():
     client = APIClient()
 
     assert client.get('/api/v1/courses/').status_code == status.HTTP_403_FORBIDDEN
     assert client.get('/api/v1/courses/1/').status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.fixture
+def login_user(db):
+    return User.objects.create_user(
+        username='login-pupil',
+        password='synthetic-valid-password',
+        role=User.Role.PUPIL,
+    )
+
+
+@pytest.fixture
+def csrf_client():
+    return APIClient(enforce_csrf_checks=True)
+
+
+@pytest.mark.django_db
+def test_login_rejects_missing_csrf_token(csrf_client, login_user):
+    response = csrf_client.post(
+        '/api/v1/auth/login/',
+        {'username': login_user.username, 'password': 'synthetic-valid-password'},
+        format='json',
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert '_auth_user_id' not in csrf_client.session
+
+
+@pytest.mark.django_db
+def test_csrf_endpoint_sets_cookie_and_valid_login_rotates_session(
+    csrf_client,
+    login_user,
+):
+    csrf_response = csrf_client.get('/api/v1/auth/csrf/')
+    csrf_token = csrf_response.data['csrfToken']
+    assert csrf_response.status_code == status.HTTP_200_OK
+    assert 'csrftoken' in csrf_client.cookies
+
+    session = csrf_client.session
+    session['pre_login'] = 'session'
+    session.save()
+    old_session_key = session.session_key
+
+    response = csrf_client.post(
+        '/api/v1/auth/login/',
+        {'username': login_user.username, 'password': 'synthetic-valid-password'},
+        format='json',
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert csrf_client.session['_auth_user_id'] == str(login_user.pk)
+    assert csrf_client.session.session_key != old_session_key
+    assert response.data == {'detail': 'Muvaffaqiyatli tizimga kirildi.'}
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ('username', 'password'),
+    [
+        ('missing-login-user', 'synthetic-valid-password'),
+        ('login-pupil', 'wrong-synthetic-password'),
+    ],
+)
+def test_login_failure_is_generic_and_does_not_log_secrets(
+    csrf_client,
+    login_user,
+    username,
+    password,
+    caplog,
+):
+    csrf_token = csrf_client.get('/api/v1/auth/csrf/').data['csrfToken']
+
+    response = csrf_client.post(
+        '/api/v1/auth/login/',
+        {'username': username, 'password': password},
+        format='json',
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert response.data == {'detail': 'Login yoki parol noto‘g‘ri.'}
+    assert username not in response.content.decode()
+    assert password not in response.content.decode()
+    assert username not in caplog.text
+    assert password not in caplog.text
+    assert '_auth_user_id' not in csrf_client.session
+
+
+@pytest.mark.django_db
+def test_login_serializer_rejects_missing_fields(csrf_client):
+    csrf_token = csrf_client.get('/api/v1/auth/csrf/').data['csrfToken']
+
+    response = csrf_client.post(
+        '/api/v1/auth/login/',
+        {},
+        format='json',
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert set(response.data) == {'username', 'password'}
+
+
+@pytest.mark.django_db
+def test_current_user_profile_only_reads_and_updates_own_allowed_fields(login_user):
+    client = APIClient()
+    client.force_authenticate(user=login_user)
+
+    profile_response = client.get('/api/v1/me/')
+    patch_response = client.patch(
+        '/api/v1/me/',
+        {'first_name': 'Sintetik', 'preferred_language': 'uz'},
+        format='json',
+    )
+
+    assert profile_response.status_code == status.HTTP_200_OK
+    assert profile_response.data == {
+        'id': login_user.pk,
+        'username': 'login-pupil',
+        'first_name': '',
+        'last_name': '',
+        'role': User.Role.PUPIL,
+        'preferred_language': '',
+    }
+    assert patch_response.status_code == status.HTTP_200_OK
+    login_user.refresh_from_db()
+    assert login_user.first_name == 'Sintetik'
+    assert login_user.preferred_language == 'uz'
+    assert login_user.role == User.Role.PUPIL
+    assert not login_user.is_staff
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    'forbidden_data',
+    [
+        {'role': User.Role.TEACHER},
+        {'is_staff': True},
+        {'username': 'different-user'},
+        {'enrollment': 123},
+    ],
+)
+def test_current_user_profile_rejects_forbidden_fields(login_user, forbidden_data):
+    client = APIClient()
+    client.force_authenticate(user=login_user)
+
+    response = client.patch(
+        '/api/v1/me/',
+        forbidden_data,
+        format='json',
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert set(response.data) == set(forbidden_data)
+    login_user.refresh_from_db()
+    assert login_user.role == User.Role.PUPIL
+    assert login_user.username == 'login-pupil'
+    assert not login_user.is_staff
+
+
+@pytest.mark.django_db
+def test_current_user_profile_is_private():
+    client = APIClient()
+
+    assert client.get('/api/v1/me/').status_code == status.HTTP_403_FORBIDDEN
+    assert client.patch(
+        '/api/v1/me/',
+        {'first_name': 'Nope'},
+        format='json',
+    ).status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+def test_current_user_profile_rejects_put(login_user):
+    client = APIClient()
+    client.force_authenticate(user=login_user)
+
+    response = client.put(
+        '/api/v1/me/',
+        {'first_name': 'Not allowed'},
+        format='json',
+    )
+
+    assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+    login_user.refresh_from_db()
+    assert login_user.first_name == ''
+
+
+@pytest.mark.django_db
+def test_logout_requires_csrf_and_revokes_session_for_private_course_api(
+    csrf_client,
+    course_api_data,
+):
+    pupil = course_api_data['pupil_a']
+    csrf_token = csrf_client.get('/api/v1/auth/csrf/').data['csrfToken']
+    assert csrf_client.login(
+        username=pupil.username,
+        password='safe-test-password',
+    )
+
+    csrf_rejected = csrf_client.post('/api/v1/auth/logout/', format='json')
+    assert csrf_rejected.status_code == status.HTTP_403_FORBIDDEN
+    assert csrf_client.get('/api/v1/courses/').status_code == status.HTTP_200_OK
+
+    logout_response = csrf_client.post(
+        '/api/v1/auth/logout/',
+        format='json',
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert logout_response.status_code == status.HTTP_200_OK
+    assert logout_response.data == {'detail': 'Tizimdan chiqildi.'}
+    assert '_auth_user_id' not in csrf_client.session
+    assert csrf_client.get('/api/v1/courses/').status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ('current_password', 'new_password', 'invalid_field'),
+    [
+        ('wrong-current-password', 'another-strong-password-2026', 'current_password'),
+        ('synthetic-valid-password', '123', 'new_password'),
+        (
+            'synthetic-valid-password',
+            'synthetic-valid-password',
+            'new_password',
+        ),
+    ],
+)
+def test_change_password_rejects_invalid_passwords(
+    login_user,
+    current_password,
+    new_password,
+    invalid_field,
+):
+    client = APIClient()
+    client.force_authenticate(user=login_user)
+
+    response = client.post(
+        '/api/v1/me/change-password/',
+        {
+            'current_password': current_password,
+            'new_password': new_password,
+        },
+        format='json',
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert invalid_field in response.data
+    login_user.refresh_from_db()
+    assert login_user.check_password('synthetic-valid-password')
+    assert not login_user.must_change_password
+
+
+@pytest.mark.django_db
+def test_must_change_password_gates_courses_and_rotates_only_current_session(
+    csrf_client,
+    course_api_data,
+):
+    pupil = course_api_data['pupil_a']
+    pupil.must_change_password = True
+    pupil.save(update_fields=['must_change_password'])
+    other_client = APIClient()
+    assert csrf_client.login(
+        username=pupil.username,
+        password='safe-test-password',
+    )
+    assert other_client.login(
+        username=pupil.username,
+        password='safe-test-password',
+    )
+    old_current_session_key = csrf_client.session.session_key
+    csrf_token = csrf_client.get('/api/v1/auth/csrf/').data['csrfToken']
+
+    assert csrf_client.get('/api/v1/courses/').status_code == status.HTTP_403_FORBIDDEN
+    course_id = course_api_data['course_a'].pk
+    assert (
+        csrf_client.get(f'/api/v1/courses/{course_id}/').status_code
+        == status.HTTP_403_FORBIDDEN
+    )
+    assert csrf_client.get('/api/v1/me/').status_code == status.HTTP_200_OK
+
+    csrf_rejected = csrf_client.post(
+        '/api/v1/me/change-password/',
+        {
+            'current_password': 'safe-test-password',
+            'new_password': 'new-safe-password-2026',
+        },
+        format='json',
+    )
+    assert csrf_rejected.status_code == status.HTTP_403_FORBIDDEN
+
+    response = csrf_client.post(
+        '/api/v1/me/change-password/',
+        {
+            'current_password': 'safe-test-password',
+            'new_password': 'new-safe-password-2026',
+        },
+        format='json',
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data == {'detail': 'Parol muvaffaqiyatli o‘zgartirildi.'}
+    pupil.refresh_from_db()
+    assert not pupil.must_change_password
+    assert pupil.check_password('new-safe-password-2026')
+    assert csrf_client.session.session_key != old_current_session_key
+    assert csrf_client.get('/api/v1/courses/').status_code == status.HTTP_200_OK
+
+    assert other_client.get('/api/v1/courses/').status_code == status.HTTP_403_FORBIDDEN
+    assert '_auth_user_id' not in other_client.session
+
+
+@pytest.mark.django_db
+def test_must_change_password_user_can_logout(csrf_client, login_user):
+    login_user.must_change_password = True
+    login_user.save(update_fields=['must_change_password'])
+    assert csrf_client.login(
+        username=login_user.username,
+        password='synthetic-valid-password',
+    )
+    csrf_token = csrf_client.get('/api/v1/auth/csrf/').data['csrfToken']
+
+    response = csrf_client.post(
+        '/api/v1/auth/logout/',
+        format='json',
+        HTTP_X_CSRFTOKEN=csrf_token,
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert '_auth_user_id' not in csrf_client.session
