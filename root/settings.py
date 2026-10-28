@@ -72,6 +72,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'accounts.apps.AccountsConfig',
     'academics.apps.AcademicsConfig',
+    'learning.apps.LearningConfig',
     'apps.apps.AppsConfig',
     'rest_framework',
     'drf_spectacular',

@@ -63,6 +63,19 @@
   (<https://docs.djangoproject.com/en/5.2/topics/db/transactions/>) va PostgreSQL
   cheklovlari (<https://www.postgresql.org/docs/current/ddl-constraints.html>).
 
+## P019 mavzular va read API
+
+- `CourseOffering` muayyan sinf-fan kursini ifodalaydi; `learning.Topic` esa shu
+  kursning o‘quv yiliga tegishli choragidagi (`Term`) tartiblangan dars mavzusidir.
+- `Topic.state` `draft` yoki `published`; `published_at` nashr vaqtini saqlaydi.
+  `(course, term, order)` DB constraint bilan unikal. Term va kursning o‘quv yili
+  mosligi model `clean()` validatsiyasida tekshiriladi.
+- Read-only API `/api/v1/courses/<id>/topics/` va `/api/v1/topics/<id>/` orqali
+  mavzularni qaytaradi. Teacher faqat biriktirilgan kurs mavzularini, pupil faqat
+  enrollment mavjud kurslarning published mavzularini ko‘radi. Parent scope va
+  detail scope mos kelmasa, API 404 qaytaradi. Create/update/resource/publish
+  endpointlari bu bosqichda yo‘q.
+
 ## Loyiha chegarasi
 
 - **Maqsad:** bitta maktabning o‘quv jarayoniga mo‘ljallangan LMS backendini bosqichma-

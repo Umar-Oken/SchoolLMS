@@ -34,13 +34,14 @@ tekshiruv `implemented_unverified` holatida qoladi; dependency yoki muhit to‘s
 | P016 | verified | Kurs list/detail scope’i `pupil_course_scope` va `teacher_course_scope` selectorlariga jamlandi; object permission list filteringni to‘ldiradi. Pupil/teacher tarixiy kurs aloqasini o‘qiydi, lekin yozish uchun faol enrollment yoki faol `can_grade=True` assignment talab qilinadi. 2 pupil/2 teacher ID almashtirishlari, tarixiy read va yopiq enrollment/assignment hamda grading huquqi matritsasi testlandi. `pytest -q` — 66 passed; `manage.py check`, schema validation, migration drift va `git diff --check` o‘tdi. |
 | P017 | verified | User modeliga `manage_accounts`/`manage_academics` custom Django permissions va `CapabilityGrantAudit` qo‘shildi. Faol superuser actor CLI orqali mavjud faol teacherga bitta capabilityni sabab bilan beradi; pupil rad etiladi, target qatori transaction ichida lock qilinadi, takroriy grant auditni takrorlamaydi. DRF capability permission class’lari qo‘shildi; profil PATCH noma’lum capability’ni rad etishi testlandi. `pytest -q` — 73 passed; `manage.py check`, schema validation, migration drift va `git diff --check` o‘tdi. |
 | P018 | verified | `manage_accounts` ruxsatli operator uchun `POST /api/v1/accounts/` va `POST /api/v1/accounts/<id>/reset-password/` qo‘shildi. Pupil/teacher yaratish, serverda validatorlardan o‘tuvchi tasodifiy vaqtinchalik parol, `set_password()` hash va `must_change_password=True` bilan bajariladi; vaqtinchalik parol faqat `Cache-Control: no-store` javobida bir marta qaytadi. Reset password hashini yangilab avvalgi sessiyalarni keyingi so‘rovda Django auth hash tekshiruvi bilan bekor qiladi. Privilege/enrollment va reset request body field’lari rad etiladi; lifecycle audit actor/target/action/vaqtni saqlaydi, request body yoki parol log/auditga yozilmaydi. `pytest -q` — 79 passed (+9 subtests); Django check, schema validation, migration drift va `git diff --check` o‘tdi. |
-| P019–P090 | pending | Keyingi prompt faqat alohida so‘rovdan keyin boshlanadi. |
+| P019 | verified | `learning.Topic` va initial migration qo‘shildi; termning academic year bilan mosligi model `clean()`da, `(course, term, order)` unikaligi DB constraint’da tekshiriladi. Read-only DRF ViewSet `/api/v1/courses/<id>/topics/` va `/api/v1/topics/<id>/` GET’larini beradi; faqat so‘ralgan route’lar ochilgan, global topic list yo‘q. Course queryset teacher assignment/pupil enrollment bilan cheklangan, pupil draft list/detail’dan 404 oladi, scope’dan tashqari parent course 404 qaytaradi. `pytest -q` — 85 passed (+9 subtests); `manage.py check`, `spectacular --validate`, migration drift va `git diff --check` o‘tdi. |
+| P020–P090 | pending | Keyingi prompt faqat alohida so‘rovdan keyin boshlanadi. |
 | P023-A…P023-F | pending | P023’dan keyingi alohida katalog/roster promptlari. |
 | P081-A…P081-B | pending | P081’dan keyingi proxy/TLS va storage promptlari. |
 
 ## Keyingi prompt
 
-**P019 — Topic modeli va read API** — P018 qabul mezonlari tekshirildi;
+**P020 — Teacherning bitta draft mavzu yaratishi** — P019 qabul mezonlari tekshirildi;
 navbatdagi prompt faqat alohida so‘rovdan keyin boshlanadi.
 
 ## Qaydlar
