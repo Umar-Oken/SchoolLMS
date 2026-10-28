@@ -73,8 +73,44 @@
 - Read-only API `/api/v1/courses/<id>/topics/` va `/api/v1/topics/<id>/` orqali
   mavzularni qaytaradi. Teacher faqat biriktirilgan kurs mavzularini, pupil faqat
   enrollment mavjud kurslarning published mavzularini ko‘radi. Parent scope va
-  detail scope mos kelmasa, API 404 qaytaradi. Create/update/resource/publish
-  endpointlari bu bosqichda yo‘q.
+  detail scope mos kelmasa, API 404 qaytaradi. Pupil draft detail’ni ID bilan ham
+  ololmaydi.
+
+## P020 draft mavzu yaratish
+
+- `POST /api/v1/topics/` oddiy `CreateModelMixin` orqali topic yaratadi. Faqat faol
+  assignment’i bor teacher kursi tanlanadi; pupil so‘rovi 403, begona yoki
+  arxivlangan kurs 404 qaytaradi.
+- Client `course`, `term`, `title`, `objective`, `order` yuboradi. Serializer
+  termning course o‘quv yiliga mosligini tekshiradi; `state`, `published_at`,
+  `teacher` va boshqa noma’lum maydonlar input sifatida rad etiladi. Server `draft`
+  holati va bo‘sh `published_at` qiymatini o‘rnatadi.
+- Faqat `POST /topics/` ochilgan; course topic list va topic detail GET’lari
+  saqlanadi. Update, delete, publish, resource va boshqa write amallari yo‘q.
+
+## P021 draft tahriri va arxivlash
+
+- Faqat biriktirilgan faol teacher draft mavzuni `PATCH /api/v1/topics/<id>/`
+  orqali `term`, `title`, `objective`, `order` maydonlarida tahrirlaydi. Course,
+  state, publish metadata, archive metadata va noma’lum maydonlar input sifatida
+  rad etiladi; PUT, published update, begona teacher update hamda DELETE yo‘q.
+- `POST /api/v1/topics/<id>/archive/` `archived_at` vaqtini yozadi; DB qatori
+  o‘chmaydi. Archived mavzular teacher/pupil active list/detail’dan chiqariladi,
+  pupil published mavzular ro‘yxatidan ham olinadi. Arxivni qaytarish bu scope’da yo‘q.
+- Archive kelajakdagi baho/topshiriq/submission FK tarixini o‘chirmaydi yoki
+  o‘zgartirmaydi. Keyingi modullar tarixiy yozuvlarni `PROTECT` kabi FK siyosati
+  bilan saqlashi kerak; arxivlangan mavzuga yangi faol ishlar ochilmaydi.
+
+## P022 mavzuni nashr qilish
+
+- `POST /api/v1/topics/<id>/publish/` tor `publish_topic` xizmati orqali ishlaydi.
+  Faqat faol assignment’i bor teacher o‘zining arxivlanmagan kurs mavzusini nashr qila oladi.
+- Draft publish’dan oldin title va objective bo‘sh emasligi hamda term yili course
+  yiliga mosligi tekshiriladi. Bitta transaction `state=published` va `published_at`
+  ni birgalikda yozadi. Published topic qayta publish qilinganda o‘zgarmagan natija
+  va dastlabki timestamp qaytadi; takroriy yozuv yaratilmaydi.
+- O‘quvchiga mavzu publish bo‘lgach, mavjud enrollment/topic read scope’i orqali
+  ko‘rinadi. Notification, Celery, resource avtomatik nashri va AI amali qo‘shilmagan.
 
 ## Loyiha chegarasi
 

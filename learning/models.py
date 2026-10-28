@@ -26,6 +26,7 @@ class Topic(models.Model):
         default=State.DRAFT,
     )
     published_at = models.DateTimeField(blank=True, null=True)
+    archived_at = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         constraints = [

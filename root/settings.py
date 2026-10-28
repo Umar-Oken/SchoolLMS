@@ -123,9 +123,23 @@ REST_FRAMEWORK = {
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'School LMS API',
-    'DESCRIPTION': 'API schema for the School LMS project.',
+    'DESCRIPTION': (
+        'Maktab LMS API. Autentifikatsiya Django session cookie va CSRF '
+        'himoyasi orqali ishlaydi.'
+    ),
     'VERSION': '1.0.0',
+    'TAGS': [
+        {'name': 'Auth', 'description': 'CSRF va session orqali kirish/chiqish.'},
+        {'name': 'Profil', 'description': 'Joriy foydalanuvchi va parol.'},
+        {'name': 'Accounts', 'description': 'Account boshqaruvi.'},
+        {'name': 'Academics', 'description': 'Kurslarni ko‘rish.'},
+        {'name': 'Learning', 'description': 'Topic yaratish, o‘qish va boshqarish.'},
+    ],
     'REDOC_DIST': 'SIDECAR',
+    'SWAGGER_UI_SETTINGS': {
+        'deepLinking': True,
+        'displayRequestDuration': True,
+    },
 }
 
 

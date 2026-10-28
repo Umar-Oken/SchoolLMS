@@ -11,7 +11,13 @@ from django.middleware.csrf import get_token
 from django.utils.crypto import get_random_string
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import (
+    OpenApiExample,
+    OpenApiParameter,
+    extend_schema,
+    extend_schema_view,
+)
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.generics import GenericAPIView, RetrieveUpdateAPIView
@@ -32,6 +38,7 @@ from accounts.serializers import (
     LoginInputSerializer,
     LoginResponseSerializer,
 )
+from root.openapi import CSRF_HEADER, common_error_responses, error_response
 
 
 def generate_temporary_password(user):
@@ -51,7 +58,23 @@ class CsrfCookieView(GenericAPIView):
     permission_classes = (AllowAny,)
     authentication_classes = ()
 
-    @extend_schema(request=None, responses=CsrfTokenSerializer)
+    @extend_schema(
+        summary='CSRF token olish',
+        description=(
+            'Session orqali himoyalangan POST/PATCH so‘rovlaridan oldin '
+            'cookie va unga mos CSRF tokenni beradi.'
+        ),
+        tags=['Auth'],
+        request=None,
+        responses={status.HTTP_200_OK: CsrfTokenSerializer},
+        examples=[
+            OpenApiExample(
+                'CSRF token javobi',
+                value={'csrfToken': 'csrf-token-namuna'},
+                response_only=True,
+            )
+        ],
+    )
     def get(self, request):
         return Response({"csrfToken": get_token(request)})
 
@@ -63,11 +86,34 @@ class LoginView(GenericAPIView):
     authentication_classes = ()
 
     @extend_schema(
+        summary='Tizimga kirish',
+        description=(
+            'Username va parol bilan session yaratadi. Avval CSRF tokenni '
+            'oling, so‘ng CSRF header bilan yuboring.'
+        ),
+        tags=['Auth'],
+        parameters=[CSRF_HEADER],
         request=LoginInputSerializer,
         responses={
             status.HTTP_200_OK: LoginResponseSerializer,
             status.HTTP_400_BAD_REQUEST: LoginErrorSerializer,
+            status.HTTP_403_FORBIDDEN: error_response(
+                'CSRF cookie/header yo‘q yoki mos emas.',
+                {'detail': 'CSRF token missing or incorrect.'},
+            ),
         },
+        examples=[
+            OpenApiExample(
+                'Login so‘rovi',
+                value={'username': 'teacher01', 'password': 'namuna-parol'},
+                request_only=True,
+            ),
+            OpenApiExample(
+                'Login javobi',
+                value={'detail': 'Muvaffaqiyatli tizimga kirildi.'},
+                response_only=True,
+            ),
+        ],
     )
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -89,6 +135,35 @@ class LoginView(GenericAPIView):
         return Response({"detail": "Muvaffaqiyatli tizimga kirildi."})
 
 
+@extend_schema_view(
+    get=extend_schema(
+        summary='Joriy profilni ko‘rish',
+        description='Session orqali kirgan foydalanuvchining profilini qaytaradi.',
+        tags=['Profil'],
+        responses={
+            status.HTTP_200_OK: CurrentUserSerializer,
+            **common_error_responses(),
+        },
+    ),
+    patch=extend_schema(
+        summary='Joriy profilni yangilash',
+        description='Faqat ism, familiya va afzal tilni o‘zgartiradi.',
+        tags=['Profil'],
+        parameters=[CSRF_HEADER],
+        request=CurrentUserSerializer,
+        responses={
+            status.HTTP_200_OK: CurrentUserSerializer,
+            **common_error_responses(),
+        },
+        examples=[
+            OpenApiExample(
+                'Profilni yangilash',
+                value={'first_name': 'Ali', 'preferred_language': 'uz'},
+                request_only=True,
+            )
+        ],
+    ),
+)
 class CurrentUserView(RetrieveUpdateAPIView):
     serializer_class = CurrentUserSerializer
     permission_classes = (IsAuthenticated,)
@@ -105,8 +180,28 @@ class ChangePasswordView(GenericAPIView):
     authentication_classes = (SessionAuthentication,)
 
     @extend_schema(
+        summary='Parolni almashtirish',
+        description=(
+            'Joriy parolni tekshiradi, yangi parolni validatsiya qiladi va '
+            'joriy sessionni saqlab qoladi.'
+        ),
+        tags=['Profil'],
+        parameters=[CSRF_HEADER],
         request=ChangePasswordSerializer,
-        responses={status.HTTP_200_OK: LoginResponseSerializer},
+        responses={
+            status.HTTP_200_OK: LoginResponseSerializer,
+            **common_error_responses(),
+        },
+        examples=[
+            OpenApiExample(
+                'Parol almashtirish',
+                value={
+                    'current_password': 'eski-parol',
+                    'new_password': 'Yangi-kuchli-parol-2026',
+                },
+                request_only=True,
+            )
+        ],
     )
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -125,8 +220,15 @@ class LogoutView(APIView):
     authentication_classes = (SessionAuthentication,)
 
     @extend_schema(
+        summary='Tizimdan chiqish',
+        description='Joriy sessionni tugatadi.',
+        tags=['Auth'],
+        parameters=[CSRF_HEADER],
         request=None,
-        responses={status.HTTP_200_OK: LoginResponseSerializer},
+        responses={
+            status.HTTP_200_OK: LoginResponseSerializer,
+            **common_error_responses(),
+        },
     )
     def post(self, request):
         logout(request._request)
@@ -143,8 +245,31 @@ class AccountCreateView(GenericAPIView):
     authentication_classes = (SessionAuthentication,)
 
     @extend_schema(
+        summary='Account yaratish',
+        description=(
+            'manage_accounts huquqli operator pupil yoki teacher account '
+            'yaratadi va bir martalik vaqtinchalik parol qaytaradi.'
+        ),
+        tags=['Accounts'],
+        parameters=[CSRF_HEADER],
         request=AccountCreateSerializer,
-        responses={status.HTTP_201_CREATED: AccountCreatedResponseSerializer},
+        responses={
+            status.HTTP_201_CREATED: AccountCreatedResponseSerializer,
+            **common_error_responses(),
+        },
+        examples=[
+            OpenApiExample(
+                'Account yaratish',
+                value={
+                    'username': 'pupil07',
+                    'first_name': 'Aziza',
+                    'last_name': 'Karimova',
+                    'role': 'pupil',
+                    'preferred_language': 'uz',
+                },
+                request_only=True,
+            )
+        ],
     )
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
@@ -185,8 +310,24 @@ class AccountResetPasswordView(GenericAPIView):
     authentication_classes = (SessionAuthentication,)
 
     @extend_schema(
+        summary='Account parolini qayta o‘rnatish',
+        description='manage_accounts huquqli operator vaqtinchalik parol yaratadi.',
+        tags=['Accounts'],
+        parameters=[
+            OpenApiParameter(
+                name='id',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.PATH,
+                required=True,
+                description='Paroli qayta o‘rnatiladigan account IDsi.',
+            ),
+            CSRF_HEADER,
+        ],
         request=AccountResetPasswordSerializer,
-        responses={status.HTTP_200_OK: AccountCreatedResponseSerializer},
+        responses={
+            status.HTTP_200_OK: AccountCreatedResponseSerializer,
+            **common_error_responses(),
+        },
     )
     def post(self, request, pk):
         with transaction.atomic():

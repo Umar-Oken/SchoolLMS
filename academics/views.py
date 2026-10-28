@@ -1,4 +1,6 @@
 from django.db.models import Prefetch
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema_view, extend_schema
 from rest_framework.generics import ListAPIView, RetrieveAPIView
 from rest_framework.permissions import (
     SAFE_METHODS,
@@ -14,6 +16,7 @@ from academics.models import (
     TeachingAssignment,
 )
 from academics.serializers import CourseReadSerializer
+from root.openapi import common_error_responses
 
 
 def pupil_course_scope(user, *, active_only=False):
@@ -118,9 +121,43 @@ class CourseReadQuerysetMixin:
         return queryset.distinct()
 
 
+@extend_schema_view(
+    get=extend_schema(
+        summary='Kurslar ro‘yxati',
+        description=(
+            'Faqat session orqali kirgan teacher yoki pupil qatnashadigan '
+            'arxivlanmagan kurslarni ko‘rsatadi.'
+        ),
+        tags=['Academics'],
+        responses={
+            200: CourseReadSerializer(many=True),
+            **common_error_responses(),
+        },
+    ),
+)
 class CourseListView(CourseReadQuerysetMixin, ListAPIView):
     pass
 
 
+@extend_schema_view(
+    get=extend_schema(
+        summary='Kurs tafsiloti',
+        description='Joriy foydalanuvchiga tegishli bitta kursni ko‘rsatadi.',
+        tags=['Academics'],
+        parameters=[
+            OpenApiParameter(
+                name='id',
+                type=OpenApiTypes.INT,
+                location=OpenApiParameter.PATH,
+                required=True,
+                description='Kurs IDsi.',
+            )
+        ],
+        responses={
+            200: CourseReadSerializer,
+            **common_error_responses(),
+        },
+    ),
+)
 class CourseDetailView(CourseReadQuerysetMixin, RetrieveAPIView):
     pass
