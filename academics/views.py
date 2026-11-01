@@ -18,6 +18,7 @@ from rest_framework.permissions import (
 from accounts.models import User
 from accounts.permissions import CanManageAcademics, MustChangePasswordPermission
 from academics.models import (
+    AcademicYear,
     CourseOffering,
     MembershipStatus,
     SchoolClass,
@@ -25,6 +26,8 @@ from academics.models import (
     TeachingAssignment,
 )
 from academics.serializers import (
+    AcademicYearAggregateSerializer,
+    AcademicYearCatalogReadSerializer,
     CourseOfferingWriteSerializer,
     CourseReadSerializer,
     SchoolClassOptionSerializer,
@@ -197,6 +200,46 @@ class CourseOfferingUpdateView(UpdateAPIView):
 
     def get_queryset(self):
         return CourseOffering.objects.select_for_update()
+
+    def update(self, request, *args, **kwargs):
+        with transaction.atomic():
+            return super().update(request, *args, **kwargs)
+
+
+class AcademicYearCatalogListView(ListAPIView):
+    serializer_class = AcademicYearCatalogReadSerializer
+    permission_classes = (IsAuthenticated, MustChangePasswordPermission)
+
+    def get_queryset(self):
+        return AcademicYear.objects.prefetch_related("terms")
+
+
+class AcademicYearCatalogDetailView(RetrieveAPIView):
+    serializer_class = AcademicYearCatalogReadSerializer
+    permission_classes = (IsAuthenticated, MustChangePasswordPermission)
+    queryset = AcademicYear.objects.prefetch_related("terms")
+
+
+class AcademicYearAggregateCreateView(CreateAPIView):
+    queryset = AcademicYear.objects.all()
+    serializer_class = AcademicYearAggregateSerializer
+    permission_classes = (
+        IsAuthenticated,
+        MustChangePasswordPermission,
+        CanManageAcademics,
+    )
+
+
+class AcademicYearAggregateUpdateView(UpdateAPIView):
+    serializer_class = AcademicYearAggregateSerializer
+    permission_classes = (
+        IsAuthenticated,
+        MustChangePasswordPermission,
+        CanManageAcademics,
+    )
+
+    def get_queryset(self):
+        return AcademicYear.objects.select_for_update().prefetch_related("terms")
 
     def update(self, request, *args, **kwargs):
         with transaction.atomic():

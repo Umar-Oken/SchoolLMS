@@ -6,13 +6,26 @@ from django.db.models import Q
 
 from accounts.models import User
 from academics.models import (
+    AcademicStatus,
     ClassMembership,
     CourseOffering,
     Enrollment,
     MembershipStatus,
     SchoolClass,
     TeachingAssignment,
+    Term,
 )
+from rest_framework.exceptions import ValidationError as APIValidationError
+
+
+def ensure_term_open(term, *, lock=False):
+    if lock:
+        term = Term.objects.select_for_update().get(pk=term.pk)
+    if term.status == AcademicStatus.CLOSED:
+        raise APIValidationError({
+            'term': 'Yopilgan chorakka yangi yozuv kiritib bo‘lmaydi.'
+        })
+    return term
 
 
 def _validate_new_assignment(course, teacher):

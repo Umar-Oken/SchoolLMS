@@ -112,6 +112,27 @@
 - O‘quvchiga mavzu publish bo‘lgach, mavjud enrollment/topic read scope’i orqali
   ko‘rinadi. Notification, Celery, resource avtomatik nashri va AI amali qo‘shilmagan.
 
+## P023-A o‘quv yili va chorak katalog aggregate’i
+
+- `AcademicYear` katalog aggregate’i; unga tegishli `Term`lar nested ro‘yxat sifatida
+  o‘qiladi va operator create/update so‘rovida boshqariladi.
+  `GET /api/v1/catalog/academic-years/` va detail endpointi authenticated
+  teacher/pupil uchun read-only. `POST /api/v1/admin/academic-years/` va
+  `PUT/PATCH /api/v1/admin/academic-years/<id>/` `manage_academics` talab qiladi.
+- Yangi aggregate body `label`, `start_date`, `end_date`, ixtiyoriy `status` va
+  `terms` (`order`, sana oralig‘i, ixtiyoriy `status`) oladi. Update’da `terms`
+  berilsa har bir mavjud chorak `id` bilan yangilanadi yoki ID’siz yangi chorak
+  qo‘shiladi; ro‘yxatdan tushirib qoldirilgan chorak o‘chirilmaydi. Tartib yil ichida
+  unikal, chorak sanalari yil chegarasida bo‘lishi shart. `PUT/PATCH` tranzaksiyada.
+- Year/term delete route yo‘q. Mavjud `PROTECT` FK’lari bog‘langan yil yoki chorakni
+  o‘chirishdan saqlaydi; `status=closed` tarixni arxiv/close qiladi, Topic/baho kabi
+  tarixiy qatorlarni o‘chirmaydi.
+- `academics.services.ensure_term_open(term, lock=True)` yozuv tranzaksiyasi ichida
+  chorak qatorini lock qilib yopiq holatni tekshiradi. Mavzu create/update/publish
+  shu shared guard’dan foydalanadi. Keyingi vazifa va baho write service’lari ham
+  o‘z transaction’i ichida shu helperni chaqirishi shart; yopiq termga yangi
+  vazifa/baho yozuvi kiritilmaydi.
+
 ## Loyiha chegarasi
 
 - **Maqsad:** bitta maktabning o‘quv jarayoniga mo‘ljallangan LMS backendini bosqichma-

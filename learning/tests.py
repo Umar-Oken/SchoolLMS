@@ -259,6 +259,51 @@ def test_teacher_can_create_draft_topic_for_assigned_course(topic_api_data):
 
 
 @pytest.mark.django_db
+def test_closed_term_blocks_topic_writes_without_removing_published_history(
+    topic_api_data,
+):
+    term = topic_api_data['term']
+    term.status = 'closed'
+    term.save(update_fields=['status'])
+
+    client = APIClient()
+    client.force_authenticate(user=topic_api_data['teacher_a'])
+    create_response = client.post(
+        '/api/v1/topics/',
+        {
+            'course': topic_api_data['course_a'].pk,
+            'term': term.pk,
+            'title': 'Blocked new topic',
+            'objective': 'Closed terms reject writes.',
+            'order': 3,
+        },
+        format='json',
+    )
+    update_response = client.patch(
+        f"/api/v1/topics/{topic_api_data['draft'].pk}/",
+        {'title': 'Blocked edit'},
+        format='json',
+    )
+    publish_response = client.post(
+        f"/api/v1/topics/{topic_api_data['draft'].pk}/publish/",
+        {},
+        format='json',
+    )
+
+    assert create_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'term' in create_response.data
+    assert update_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'term' in update_response.data
+    assert publish_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'term' in publish_response.data
+    assert Topic.objects.filter(pk=topic_api_data['published'].pk).exists()
+    topic_api_data['draft'].refresh_from_db()
+    assert topic_api_data['draft'].state == Topic.State.DRAFT
+    assert topic_api_data['draft'].title == 'Draft topic'
+    assert not Topic.objects.filter(title='Blocked new topic').exists()
+
+
+@pytest.mark.django_db
 def test_topic_create_requires_session_csrf_token(topic_api_data):
     client = APIClient(enforce_csrf_checks=True)
     csrf_token = client.get('/api/v1/auth/csrf/').data['csrfToken']

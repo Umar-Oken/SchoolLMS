@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework.exceptions import NotFound, ValidationError
 
 from accounts.models import User
+from academics.services import ensure_term_open
 from academics.views import teacher_course_scope
 from learning.models import Topic
 
@@ -28,6 +29,8 @@ def publish_topic(topic_id, *, actor):
     )
     if topic is None:
         raise NotFound()
+
+    ensure_term_open(topic.term, lock=True)
 
     if topic.state == Topic.State.PUBLISHED:
         if topic.published_at is None:

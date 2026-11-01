@@ -17,6 +17,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import User
 from academics.models import (
+    AcademicStatus,
     AcademicYear,
     ClassMembership,
     CourseOffering,
@@ -1320,3 +1321,184 @@ def test_must_change_password_user_can_logout(csrf_client, login_user):
 
     assert response.status_code == status.HTTP_200_OK
     assert '_auth_user_id' not in csrf_client.session
+
+
+@pytest.mark.django_db
+def test_academic_year_aggregate_permissions_and_term_closure(academic_year):
+    teacher = User.objects.create_user(
+        username='year-api-teacher',
+        password='safe-test-password',
+        role=User.Role.TEACHER,
+    )
+    pupil = User.objects.create_user(
+        username='year-api-pupil',
+        password='safe-test-password',
+        role=User.Role.PUPIL,
+    )
+    operator = User.objects.create_user(
+        username='year-api-operator',
+        password='safe-test-password',
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    year_payload = {
+        'label': '2028–2029',
+        'start_date': '2028-09-01',
+        'end_date': '2029-06-30',
+        'terms': [
+            {
+                'order': 1,
+                'start_date': '2028-09-01',
+                'end_date': '2028-12-31',
+            },
+            {
+                'order': 2,
+                'start_date': '2029-01-01',
+                'end_date': '2029-06-30',
+            },
+        ],
+    }
+
+    teacher_client = APIClient()
+    teacher_client.force_authenticate(user=teacher)
+    pupil_client = APIClient()
+    pupil_client.force_authenticate(user=pupil)
+    assert teacher_client.get('/api/v1/catalog/academic-years/').status_code == (
+        status.HTTP_200_OK
+    )
+    assert pupil_client.get('/api/v1/catalog/academic-years/').status_code == (
+        status.HTTP_200_OK
+    )
+    assert teacher_client.post(
+        '/api/v1/admin/academic-years/',
+        year_payload,
+        format='json',
+    ).status_code == status.HTTP_403_FORBIDDEN
+    assert teacher_client.patch(
+        f'/api/v1/admin/academic-years/{academic_year.pk}/',
+        {'status': AcademicStatus.CLOSED},
+        format='json',
+    ).status_code == status.HTTP_403_FORBIDDEN
+
+    operator_client = APIClient()
+    operator_client.force_authenticate(user=operator)
+    created = operator_client.post(
+        '/api/v1/admin/academic-years/',
+        year_payload,
+        format='json',
+    )
+    assert created.status_code == status.HTTP_201_CREATED
+    year_id = created.data['id']
+    terms = created.data['terms']
+    assert len(terms) == 2
+    assert all(term['status'] == AcademicStatus.UPCOMING for term in terms)
+
+    update = operator_client.patch(
+        f'/api/v1/admin/academic-years/{year_id}/',
+        {
+            'status': AcademicStatus.CLOSED,
+            'terms': [
+                {
+                    'id': terms[0]['id'],
+                    'order': 2,
+                    'start_date': '2028-09-01',
+                    'end_date': '2028-12-31',
+                    'status': AcademicStatus.CLOSED,
+                },
+                {
+                    'id': terms[1]['id'],
+                    'order': 1,
+                    'start_date': '2029-01-01',
+                    'end_date': '2029-06-30',
+                    'status': AcademicStatus.CLOSED,
+                },
+            ],
+        },
+        format='json',
+    )
+    assert update.status_code == status.HTTP_200_OK
+    assert update.data['status'] == AcademicStatus.CLOSED
+    updated_orders = {
+        term['id']: term['order']
+        for term in update.data['terms']
+    }
+    assert updated_orders[terms[0]['id']] == 2
+    assert updated_orders[terms[1]['id']] == 1
+    assert all(term['status'] == AcademicStatus.CLOSED for term in update.data['terms'])
+    assert operator_client.delete(
+        f'/api/v1/admin/academic-years/{year_id}/',
+    ).status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+    assert AcademicYear.objects.filter(pk=year_id).exists()
+
+
+@pytest.mark.django_db
+def test_academic_year_aggregate_rejects_duplicate_or_out_of_bounds_terms(
+    academic_year,
+):
+    operator = User.objects.create_user(
+        username='year-invalid-operator',
+        password='safe-test-password',
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+
+    duplicate_orders = {
+        'label': 'Invalid duplicate',
+        'start_date': '2028-09-01',
+        'end_date': '2029-06-30',
+        'terms': [
+            {'order': 1, 'start_date': '2028-09-01', 'end_date': '2028-12-31'},
+            {'order': 1, 'start_date': '2029-01-01', 'end_date': '2029-06-30'},
+        ],
+    }
+    out_of_bounds = {
+        'label': 'Invalid range',
+        'start_date': '2028-09-01',
+        'end_date': '2029-06-30',
+        'terms': [
+            {'order': 1, 'start_date': '2028-08-31', 'end_date': '2028-12-31'},
+        ],
+    }
+    duplicate_response = client.post(
+        '/api/v1/admin/academic-years/',
+        duplicate_orders,
+        format='json',
+    )
+    bounds_response = client.post(
+        '/api/v1/admin/academic-years/',
+        out_of_bounds,
+        format='json',
+    )
+
+    assert duplicate_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'terms' in duplicate_response.data
+    assert bounds_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'terms' in bounds_response.data
+    assert AcademicYear.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_referenced_term_cannot_be_deleted(course_api_data):
+    year = course_api_data['course_a'].school_class.year
+    term = Term.objects.create(
+        year=year,
+        order=1,
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 11, 30),
+    )
+    Topic.objects.create(
+        course=course_api_data['course_a'],
+        term=term,
+        title='Historical topic',
+        objective='Keep published history',
+        order=1,
+        state=Topic.State.PUBLISHED,
+    )
+
+    with pytest.raises(ProtectedError):
+        term.delete()
+
+    assert Term.objects.filter(pk=term.pk).exists()
+    assert Topic.objects.filter(term=term, state=Topic.State.PUBLISHED).exists()

@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from rest_framework.decorators import action
@@ -15,6 +16,7 @@ from drf_spectacular.utils import (
 from accounts.models import User
 from accounts.permissions import MustChangePasswordPermission
 from academics.models import CourseOffering
+from academics.services import ensure_term_open
 from academics.views import pupil_course_scope, teacher_course_scope
 from learning.models import Topic
 from learning.serializers import (
@@ -146,7 +148,18 @@ class TopicViewSet(
         return super().get_serializer_class()
 
     def perform_create(self, serializer):
-        serializer.save(state=Topic.State.DRAFT, published_at=None)
+        with transaction.atomic():
+            ensure_term_open(serializer.validated_data['term'], lock=True)
+            serializer.save(state=Topic.State.DRAFT, published_at=None)
+
+    def perform_update(self, serializer):
+        with transaction.atomic():
+            term = serializer.validated_data.get(
+                'term',
+                serializer.instance.term,
+            )
+            ensure_term_open(term, lock=True)
+            serializer.save()
 
     @extend_schema(
         summary='Mavzuni arxivlash',

@@ -40,12 +40,13 @@ tekshiruv `implemented_unverified` holatida qoladi; dependency yoki muhit to‘s
 | P022 | verified | `publish_topic` xizmati `transaction.atomic()` va row lock bilan ishlaydi; faqat faol assignment’li teacher o‘zining arxivlanmagan topic’ini publish qiladi. Draft title/objective bo‘shligi va term-course yili mosligi tekshiriladi, keyin state hamda published_at bir transaction ichida yoziladi. Qayta publish original timestamp’ni qaytaradi; pupilga published mavzu ko‘rinadi. Pupil/foreign teacher, arxivlangan topic va bo‘sh title/objective rad qilinadi. `pytest -q` — 104 passed (+9 subtests); Django check, schema validation, migration drift va `git diff --check` o‘tdi. |
 | P023 | verified | `POST /api/v1/admin/courses/` va `PUT/PATCH /api/v1/admin/courses/<id>/` `manage_academics` talab qiladi; sinf/fan FK va takroriy juftlik tekshiriladi. TeachingAssignment, Enrollment yoki Topic tarixi bo‘lgan kursning ota sinf/fanini almashtirish rad etiladi; delete route yo‘q. `GET /api/v1/catalog/classes/` va `GET /api/v1/catalog/classes/<class_id>/subjects/` frontend uchun IDli, sinfga tegishli hali ishlatilmagan fanlarni qaytaradi; selectorlar faqat read. `pytest -q` — 112 passed (+9 subtests), jumladan teacher/operator, tarixli parent almashtirish, selector scope va delete yo‘qligi sinovlari; `manage.py check`, `spectacular --validate`, migration drift va `git diff --check` o‘tdi. |
 | P024–P090 | pending | Keyingi prompt faqat alohida so‘rovdan keyin boshlanadi. |
-| P023-A…P023-F | pending | P023’dan keyingi alohida katalog/roster promptlari. |
+| P023-A | verified | Year+Term nested aggregate API: authenticated teacher/pupil catalog GET; `manage_academics` bilan POST/PATCH; atomic create/update, term/year sana chegarasi va yil ichida unikal tartib; DELETE yo‘q, FK `PROTECT`. `ensure_term_open()` row-lockli shared guard Topic create/update/publish’ni yopiq termda rad etadi, tarixiy published topic saqlanadi. `pytest -q` — 116 passed (+9 subtests); `manage.py check`, `spectacular --validate`, migration drift va `git diff --check` o‘tdi. |
+| P023-B…P023-F | pending | P023-A bajarildi; navbatdagi katalog/roster promptlari alohida so‘rovni kutadi. |
 | P081-A…P081-B | pending | P081’dan keyingi proxy/TLS va storage promptlari. |
 
 ## Keyingi prompt
 
-**P023-A…P023-F — alohida katalog/roster API promptlari** — P023 qabul mezonlari tekshirildi;
+**P023-B…P023-F — alohida katalog/roster API promptlari** — P023-A qabul mezonlari tekshirildi;
 navbatdagi prompt faqat alohida so‘rovdan keyin boshlanadi.
 
 ## Qaydlar

@@ -10,6 +10,10 @@ from accounts.views import (
     LogoutView,
 )
 from academics.views import (
+    AcademicYearAggregateCreateView,
+    AcademicYearAggregateUpdateView,
+    AcademicYearCatalogDetailView,
+    AcademicYearCatalogListView,
     AvailableSubjectOptionListView,
     CourseDetailView,
     CourseListView,
@@ -41,6 +45,26 @@ urlpatterns = [
         "admin/courses/<int:pk>/",
         CourseOfferingUpdateView.as_view(),
         name="course-update",
+    ),
+    path(
+        "catalog/academic-years/",
+        AcademicYearCatalogListView.as_view(),
+        name="academic-year-catalog-list",
+    ),
+    path(
+        "catalog/academic-years/<int:pk>/",
+        AcademicYearCatalogDetailView.as_view(),
+        name="academic-year-catalog-detail",
+    ),
+    path(
+        "admin/academic-years/",
+        AcademicYearAggregateCreateView.as_view(),
+        name="academic-year-create",
+    ),
+    path(
+        "admin/academic-years/<int:pk>/",
+        AcademicYearAggregateUpdateView.as_view(),
+        name="academic-year-update",
     ),
     path(
         "catalog/classes/",

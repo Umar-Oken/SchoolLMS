@@ -2,6 +2,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import NotFound
 
 from academics.models import CourseOffering, Term
+from academics.services import ensure_term_open
 from academics.views import teacher_course_scope
 from learning.models import Topic
 
@@ -52,6 +53,7 @@ class TopicCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'term': 'Term and course must belong to the same academic year.'
             })
+        ensure_term_open(term)
         return attrs
 
 
@@ -80,6 +82,7 @@ class TopicUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'term': 'Term and course must belong to the same academic year.'
             })
+        ensure_term_open(term)
         return attrs
 
 
