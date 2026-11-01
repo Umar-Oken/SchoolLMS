@@ -1,7 +1,14 @@
+from django.db import transaction
 from django.db.models import Prefetch
+from django.shortcuts import get_object_or_404
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema_view, extend_schema
-from rest_framework.generics import ListAPIView, RetrieveAPIView
+from rest_framework.generics import (
+    CreateAPIView,
+    ListAPIView,
+    RetrieveAPIView,
+    UpdateAPIView,
+)
 from rest_framework.permissions import (
     SAFE_METHODS,
     BasePermission,
@@ -9,13 +16,20 @@ from rest_framework.permissions import (
 )
 
 from accounts.models import User
-from accounts.permissions import MustChangePasswordPermission
+from accounts.permissions import CanManageAcademics, MustChangePasswordPermission
 from academics.models import (
     CourseOffering,
     MembershipStatus,
+    SchoolClass,
+    Subject,
     TeachingAssignment,
 )
-from academics.serializers import CourseReadSerializer
+from academics.serializers import (
+    CourseOfferingWriteSerializer,
+    CourseReadSerializer,
+    SchoolClassOptionSerializer,
+    SubjectOptionSerializer,
+)
 from root.openapi import common_error_responses
 
 
@@ -161,3 +175,48 @@ class CourseListView(CourseReadQuerysetMixin, ListAPIView):
 )
 class CourseDetailView(CourseReadQuerysetMixin, RetrieveAPIView):
     pass
+
+
+class CourseOfferingCreateView(CreateAPIView):
+    queryset = CourseOffering.objects.all()
+    serializer_class = CourseOfferingWriteSerializer
+    permission_classes = (
+        IsAuthenticated,
+        MustChangePasswordPermission,
+        CanManageAcademics,
+    )
+
+
+class CourseOfferingUpdateView(UpdateAPIView):
+    serializer_class = CourseOfferingWriteSerializer
+    permission_classes = (
+        IsAuthenticated,
+        MustChangePasswordPermission,
+        CanManageAcademics,
+    )
+
+    def get_queryset(self):
+        return CourseOffering.objects.select_for_update()
+
+    def update(self, request, *args, **kwargs):
+        with transaction.atomic():
+            return super().update(request, *args, **kwargs)
+
+
+class SchoolClassOptionListView(ListAPIView):
+    queryset = SchoolClass.objects.select_related("year")
+    serializer_class = SchoolClassOptionSerializer
+
+
+class AvailableSubjectOptionListView(ListAPIView):
+    serializer_class = SubjectOptionSerializer
+
+    def get_queryset(self):
+        school_class = get_object_or_404(
+            SchoolClass,
+            pk=self.kwargs["school_class_id"],
+        )
+        used_subjects = CourseOffering.objects.filter(
+            school_class=school_class,
+        ).values("subject_id")
+        return Subject.objects.exclude(pk__in=used_subjects)

@@ -1,10 +1,12 @@
 from datetime import date
 from types import SimpleNamespace
+from typing import cast
 
 import secrets
 from io import StringIO
 
 import pytest
+from django.contrib.auth.models import Permission
 from django.core.exceptions import ValidationError
 from django.core.management import call_command, CommandError
 from django.db import IntegrityError, transaction
@@ -32,6 +34,7 @@ from academics.services import (
     replace_course_teacher,
 )
 from academics.views import IsCoursePupil, IsCourseTeacher
+from learning.models import Topic
 
 
 @pytest.fixture
@@ -675,6 +678,166 @@ def course_api_data(academic_year):
         'pupil_a': pupil_a,
         'pupil_b': pupil_b,
     }
+
+
+def grant_manage_academics(user):
+    permission = Permission.objects.get(
+        content_type__app_label='accounts',
+        codename='manage_academics',
+    )
+    user.user_permissions.add(permission)
+
+
+@pytest.mark.django_db
+def test_course_admin_create_update_requires_manage_academics(course_api_data):
+    teacher = cast(User, course_api_data['teacher_a'])
+    client = APIClient()
+    client.force_authenticate(user=teacher)
+    class_a_id = course_api_data['course_a'].school_class_id
+    subject = Subject.objects.create(code='ADMIN-SCI', title='Tabiiy fan')
+    payload = {'school_class': class_a_id, 'subject': subject.pk}
+
+    denied_create = client.post('/api/v1/admin/courses/', payload, format='json')
+    denied_update = client.patch(
+        f"/api/v1/admin/courses/{course_api_data['course_a'].pk}/",
+        payload,
+        format='json',
+    )
+
+    assert denied_create.status_code == status.HTTP_403_FORBIDDEN
+    assert denied_update.status_code == status.HTTP_403_FORBIDDEN
+    assert not CourseOffering.objects.filter(subject=subject).exists()
+
+    operator = User.objects.create_user(
+        username='academic-operator',
+        password='safe-test-password',
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client.force_authenticate(user=operator)
+
+    created = client.post('/api/v1/admin/courses/', payload, format='json')
+
+    assert created.status_code == status.HTTP_201_CREATED
+    course_id = created.data['id']
+    updated = client.patch(
+        f'/api/v1/admin/courses/{course_id}/',
+        {'school_class': course_api_data['course_b'].school_class_id},
+        format='json',
+    )
+    assert updated.status_code == status.HTTP_200_OK
+    assert updated.data['school_class'] == course_api_data['course_b'].school_class_id
+    assert client.delete(f'/api/v1/admin/courses/{course_id}/').status_code == (
+        status.HTTP_405_METHOD_NOT_ALLOWED
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize('history_kind', ('assignment', 'enrollment', 'topic'))
+@pytest.mark.parametrize('parent_field', ('school_class', 'subject'))
+def test_course_admin_rejects_parent_change_when_history_exists(
+    course_api_data,
+    academic_year,
+    history_kind,
+    parent_field,
+):
+    course = CourseOffering.objects.create(
+        school_class=course_api_data['course_a'].school_class,
+        subject=Subject.objects.create(
+            code=f'HIST-{history_kind}-{parent_field}',
+            title='Tarixli fan',
+        ),
+    )
+    if history_kind == 'assignment':
+        assign_teacher(
+            course,
+            course_api_data['teacher_a'],
+            date(2026, 9, 1),
+        )
+    elif history_kind == 'enrollment':
+        Enrollment.objects.create(
+            pupil=course_api_data['pupil_a'],
+            course=course,
+            start_date=date(2026, 9, 1),
+        )
+    else:
+        term = Term.objects.create(
+            year=academic_year,
+            order=1,
+            start_date=date(2026, 9, 1),
+            end_date=date(2026, 11, 30),
+        )
+        Topic.objects.create(
+            course=course,
+            term=term,
+            title='Mavzu',
+            objective='Maqsad',
+            order=1,
+        )
+
+    new_class = SchoolClass.objects.create(
+        year=academic_year,
+        grade_level=8,
+        section='C',
+    )
+    new_subject = Subject.objects.create(
+        code=f'NEW-{history_kind}-{parent_field}',
+        title='Yangi fan',
+    )
+    value = (
+        new_class.pk
+        if parent_field == 'school_class'
+        else new_subject.pk
+    )
+    operator = User.objects.create_user(
+        username=f'operator-{history_kind}-{parent_field}',
+        password='safe-test-password',
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+
+    response = client.patch(
+        f'/api/v1/admin/courses/{course.pk}/',
+        {parent_field: value},
+        format='json',
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    course.refresh_from_db()
+    assert course.school_class_id == course_api_data['course_a'].school_class_id
+    assert course.subject_id != new_subject.pk
+
+
+@pytest.mark.django_db
+def test_catalog_options_are_scoped_read_only_lists(course_api_data):
+    client = APIClient()
+    client.force_authenticate(user=cast(User, course_api_data['teacher_a']))
+    class_a = course_api_data['course_a'].school_class
+    unused_subject = Subject.objects.create(
+        code='OPTION-SCI',
+        title='Tanlash uchun fan',
+    )
+
+    classes = client.get('/api/v1/catalog/classes/')
+    subjects = client.get(
+        f'/api/v1/catalog/classes/{class_a.pk}/subjects/',
+    )
+
+    assert classes.status_code == status.HTTP_200_OK
+    assert any(item['id'] == class_a.pk for item in classes.data)
+    assert subjects.status_code == status.HTTP_200_OK
+    assert unused_subject.pk in {item['id'] for item in subjects.data}
+    assert course_api_data['course_a'].subject_id not in {
+        item['id'] for item in subjects.data
+    }
+    assert client.post('/api/v1/catalog/classes/', {}, format='json').status_code == (
+        status.HTTP_405_METHOD_NOT_ALLOWED
+    )
+    assert client.get('/api/v1/catalog/classes/999999/subjects/').status_code == (
+        status.HTTP_404_NOT_FOUND
+    )
 
 
 @pytest.mark.django_db

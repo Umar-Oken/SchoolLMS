@@ -9,7 +9,14 @@ from accounts.views import (
     LoginView,
     LogoutView,
 )
-from academics.views import CourseDetailView, CourseListView
+from academics.views import (
+    AvailableSubjectOptionListView,
+    CourseDetailView,
+    CourseListView,
+    CourseOfferingCreateView,
+    CourseOfferingUpdateView,
+    SchoolClassOptionListView,
+)
 
 urlpatterns = [
     path("auth/csrf/", CsrfCookieView.as_view(), name="auth-csrf"),
@@ -29,4 +36,20 @@ urlpatterns = [
     ),
     path("courses/", CourseListView.as_view(), name="course-list"),
     path("courses/<int:pk>/", CourseDetailView.as_view(), name="course-detail"),
+    path("admin/courses/", CourseOfferingCreateView.as_view(), name="course-create"),
+    path(
+        "admin/courses/<int:pk>/",
+        CourseOfferingUpdateView.as_view(),
+        name="course-update",
+    ),
+    path(
+        "catalog/classes/",
+        SchoolClassOptionListView.as_view(),
+        name="catalog-class-options",
+    ),
+    path(
+        "catalog/classes/<int:school_class_id>/subjects/",
+        AvailableSubjectOptionListView.as_view(),
+        name="catalog-subject-options",
+    ),
 ]
