@@ -133,6 +133,58 @@
   o‘z transaction’i ichida shu helperni chaqirishi shart; yopiq termga yangi
   vazifa/baho yozuvi kiritilmaydi.
 
+## P023-B sinf katalogi
+
+- `SchoolClass` alohida o‘quv yiliga tegishli. `GET /api/v1/admin/classes/` va
+  mavjud `GET /api/v1/catalog/classes/` sinf katalogini faqat o‘qiydi; list/create
+  generic endpointida `POST /api/v1/admin/classes/`, detail generic endpointida
+  `GET` va `PUT/PATCH /api/v1/admin/classes/<id>/` bor. Yozish amallari faqat
+  `manage_academics` talab qiladi.
+- Create body `year` (AcademicYear ID), `grade_level` va `section` oladi. DB’dagi
+  `(year, grade_level, section)` unique constraint va serializer validatsiyasi bir
+  yilda duplicate sinfni rad etadi. Mavjud sinf boshqa yilga ko‘chirilmaydi; keyingi
+  o‘quv yilidagi sinf alohida yaratiladi. Kurs yoki a’zolik tarixi bor sinfning
+  daraja/section identifikatori o‘zgarmaydi.
+- Roster, enrollment, transfer va promotion workflow’lari bu API scope’iga kirmaydi.
+
+## P023-C fan katalogi
+
+- `Subject` fan ta’rifi, `CourseOffering` esa fan va muayyan sinf taklifini bog‘laydi.
+  `GET /api/v1/catalog/subjects/` authenticated teacher/pupil uchun faol fanlarning
+  `id`, `code`, `title` read contract’ini beradi. `GET/POST /api/v1/admin/subjects/`
+  va `GET/PUT/PATCH /api/v1/admin/subjects/<id>/` shu katalogni o‘qiydi va
+  `manage_academics` operatoriga `code`/`title` yozish imkonini beradi.
+- `code` mavjud DB unique constraint bilan himoyalangan; serializer duplicate kodni
+  aniq 400 validatsiya xatosi qilib qaytaradi. `DELETE` yo‘q. `POST
+  /api/v1/admin/subjects/<id>/archive/` `archived_at` belgilaydi; arxivlangan fan
+  faol catalog va yangi course subject selectoridan chiqariladi, biroq mavjud
+  CourseOffering, assignment va mavzu yozuvlari o‘z FK’lari bilan saqlanadi.
+  Arxivlangan fanni yangi kursga ulash va arxivlangan Subject’ni tahrirlash rad etiladi.
+- P023’dagi mavjud course form subject selector’i ayni `id`/`code`/`title`
+  `SubjectCatalogSerializer`dan foydalanadi va arxivlangan fanlarni ko‘rsatmaydi.
+
+## P023-D teacher assignment boshqaruvi
+
+- Operator scope — `manage_academics` capability’li teacher assignment boshqaradi;
+  grading scope — faqat bugungi sana assignment intervaliga kirgan va
+  `can_grade=True` bo‘lgan teacher baho yozishi mumkin. Oddiy teacher API orqali
+  o‘ziga `can_grade` bera olmaydi.
+- `GET /api/v1/catalog/teachers/` faqat operatorga faol teacherlarning
+  `id`, `username`, `first_name`, `last_name` maydonlarini beradi. Account,
+  credential, til sozlamasi yoki boshqa shaxsiy ma’lumot qaytmaydi.
+- `POST /api/v1/admin/teaching-assignments/` operatorga kurs/teacher ID, start
+  date va `can_grade` bilan assignment yaratadi. Mavjud interval(lar) yangi
+  boshlanishidan bir kun oldin yopiladi; eski assignment qatori va teacher/
+  `can_grade` identifikatori saqlanadi. Pupil yoki o‘ziga grading vakolati
+  biriktirish validatsiyada rad etiladi.
+- `POST /api/v1/admin/teaching-assignments/<id>/close/` faqat `end_date`ni
+  o‘rnatadi. Assignment intervali yopilgach, mavjud teacher course/topic
+  write scope’idan va grading scope’idan chiqadi; published yozuvlar o‘chmaydi.
+- Baholash endpointi hali mavjud emas. Keyingi grade write servisi
+  `teacher_course_scope(..., active_only=True, can_grade=True)`-ni serverda
+  tekshirishi shart; assignment listi, capability grant API va dars o‘rinbosari
+  bu bosqichga kirmaydi.
+
 ## Loyiha chegarasi
 
 - **Maqsad:** bitta maktabning o‘quv jarayoniga mo‘ljallangan LMS backendini bosqichma-
@@ -147,8 +199,9 @@
 - **Arxitektura:** mavjud repository ichidagi Django backend. Reja modulli monolit
   tuzilmani, ehtiyoj tug‘ilganda ilovalar qo‘shishni va API contract’ini OpenAPI orqali
   hujjatlashtirishni ko‘zlaydi.
-- **Autentifikatsiya:** session auth va CSRF-himoyalangan login/logout. Ommaviy
-  ro‘yxatdan o‘tish, JWT va wildcard CORS scope’ga kirmaydi.
+- **Autentifikatsiya:** API JWT Bearer access/refresh tokenlaridan foydalanadi;
+  Django admin/session hamda CSRF himoyasi saqlanadi. Ommaviy ro‘yxatdan o‘tish
+  va wildcard CORS scope’ga kirmaydi.
 - **Maqsadli modul guruhlari:** accounts/auth, academics/catalog, learning/topics,
   files/resources, assignments/submissions, assessments/grades, scheduling/attendance,
   communications/background jobs, dashboards/API sifati va ixtiyoriy AI qoralama.
@@ -168,7 +221,7 @@
   ruxsatli tillar ro‘yxati hali kelishilmagani sababli qiymat dastlab bo‘sh bo‘lishi mumkin.
 - Custom User birinchi migratsiyadan oldin belgilanadi. Mavjud migration tarixi yoki
   DB’ni reset qilish va migration’larni o‘chirish mumkin emas.
-- Session auth, queryset scope, object permission va parent FK validatsiyasi birga
+- JWT auth, queryset scope, object permission va parent FK validatsiyasi birga
   qo‘llanadi. List/detail va write ruxsatlari foydalanuvchi roli va tegishli
   enrollment/assignment bilan cheklanadi.
 - Sana-vaqt UTC aware saqlanadi, maktab lokal ko‘rinishi `Asia/Tashkent`; ball `Decimal`.

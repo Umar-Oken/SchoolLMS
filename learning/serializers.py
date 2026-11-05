@@ -56,6 +56,9 @@ class TopicCreateSerializer(serializers.ModelSerializer):
         ensure_term_open(term)
         return attrs
 
+    def to_representation(self, instance):
+        return TopicReadSerializer(instance, context=self.context).data
+
 
 class TopicUpdateSerializer(serializers.ModelSerializer):
     term = serializers.PrimaryKeyRelatedField(queryset=Term.objects.all())
@@ -84,6 +87,9 @@ class TopicUpdateSerializer(serializers.ModelSerializer):
             })
         ensure_term_open(term)
         return attrs
+
+    def to_representation(self, instance):
+        return TopicReadSerializer(instance, context=self.context).data
 
 
 class TopicReadSerializer(serializers.ModelSerializer):

@@ -2,13 +2,23 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from rest_framework import serializers
 
+from accounts.models import User
 from academics.models import (
     AcademicStatus,
     AcademicYear,
+    ClassMembership,
     CourseOffering,
+    Enrollment,
     SchoolClass,
     Subject,
+    TeachingAssignment,
     Term,
+)
+from academics.services import (
+    close_teaching_assignment,
+    enroll_pupil_in_class,
+    replace_course_teacher,
+    sync_course_enrollments,
 )
 
 
@@ -16,6 +26,49 @@ class SubjectReadSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subject
         fields = ("code", "title")
+
+
+class SubjectCatalogSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Subject
+        fields = ("id", "code", "title")
+        read_only_fields = fields
+
+
+class SubjectAdminSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Subject
+        fields = ("id", "code", "title", "archived_at")
+        read_only_fields = ("id", "archived_at")
+        validators = []
+
+    def to_internal_value(self, data):
+        allowed_fields = {"code", "title"}
+        if hasattr(data, "keys"):
+            extra_fields = set(data.keys()) - allowed_fields
+            if extra_fields:
+                raise serializers.ValidationError({
+                    name: "Bu maydon qabul qilinmaydi."
+                    for name in extra_fields
+                })
+        return super().to_internal_value(data)
+
+    def validate_code(self, code):
+        duplicate = Subject.objects.filter(code=code)
+        if self.instance:
+            duplicate = duplicate.exclude(pk=self.instance.pk)
+        if duplicate.exists():
+            raise serializers.ValidationError(
+                "Bu kodli fan katalogda allaqachon mavjud."
+            )
+        return code
+
+    def validate(self, attrs):
+        if self.instance and self.instance.archived_at is not None and attrs:
+            raise serializers.ValidationError(
+                "Arxivlangan fan ma’lumotlarini o‘zgartirib bo‘lmaydi."
+            )
+        return attrs
 
 
 class SchoolClassReadSerializer(serializers.ModelSerializer):
@@ -32,10 +85,78 @@ class SchoolClassOptionSerializer(serializers.ModelSerializer):
         fields = ("id", "year_id", "grade_level", "section")
 
 
-class SubjectOptionSerializer(serializers.ModelSerializer):
+class SchoolClassCatalogSerializer(serializers.ModelSerializer):
+    year = serializers.PrimaryKeyRelatedField(
+        queryset=AcademicYear.objects.all(),
+    )
+
     class Meta:
-        model = Subject
-        fields = ("id", "code", "title")
+        model = SchoolClass
+        fields = ("id", "year", "grade_level", "section")
+        read_only_fields = ("id",)
+        validators = []
+
+    def validate(self, attrs):
+        instance = self.instance
+        year = attrs.get("year", instance.year if instance else None)
+        grade_level = attrs.get(
+            "grade_level",
+            instance.grade_level if instance else None,
+        )
+        section = attrs.get(
+            "section",
+            instance.section if instance else None,
+        )
+
+        if grade_level is not None and not 1 <= grade_level <= 11:
+            raise serializers.ValidationError({
+                "grade_level": "Sinf darajasi 1 dan 11 gacha bo‘lishi kerak."
+            })
+
+        if instance and "year" in attrs and year.pk != instance.year_id:
+            raise serializers.ValidationError({
+                "year": (
+                    "Mavjud sinf boshqa o‘quv yiliga ko‘chirilmaydi; "
+                    "yangi yil uchun yangi sinf yarating."
+                )
+            })
+
+        if instance and (
+            grade_level != instance.grade_level
+            or section != instance.section
+        ):
+            has_history = (
+                instance.course_offerings.exists()
+                or instance.memberships.exists()
+            )
+            if has_history:
+                raise serializers.ValidationError({
+                    "grade_level": (
+                        "Kurs yoki a’zolik tarixi bor sinfning "
+                        "darajasi va sectionini o‘zgartirib bo‘lmaydi."
+                    ),
+                    "section": (
+                        "Kurs yoki a’zolik tarixi bor sinfning "
+                        "darajasi va sectionini o‘zgartirib bo‘lmaydi."
+                    ),
+                })
+
+        duplicate = SchoolClass.objects.filter(
+            year=year,
+            grade_level=grade_level,
+            section=section,
+        )
+        if instance:
+            duplicate = duplicate.exclude(pk=instance.pk)
+        if duplicate.exists():
+            raise serializers.ValidationError({
+                "section": (
+                    "Bu o‘quv yilida shu daraja va sectiondagi sinf "
+                    "allaqachon mavjud."
+                )
+            })
+
+        return attrs
 
 
 class CourseOfferingWriteSerializer(serializers.ModelSerializer):
@@ -90,6 +211,12 @@ class CourseOfferingWriteSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 "subject": "Fan tanlanishi kerak."
             })
+        if subject.archived_at is not None and (
+            instance is None or subject.pk != instance.subject_id
+        ):
+            raise serializers.ValidationError({
+                "subject": "Arxivlangan fanni yangi kursga biriktirib bo‘lmaydi."
+            })
 
         duplicate = CourseOffering.objects.filter(
             school_class=school_class,
@@ -103,6 +230,186 @@ class CourseOfferingWriteSerializer(serializers.ModelSerializer):
             })
 
         return attrs
+
+
+class TeacherOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ("id", "username", "first_name", "last_name")
+        read_only_fields = fields
+
+
+class TeachingAssignmentReadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TeachingAssignment
+        fields = (
+            "id",
+            "course",
+            "teacher",
+            "start_date",
+            "end_date",
+            "can_grade",
+        )
+        read_only_fields = fields
+
+
+class TeachingAssignmentCommandSerializer(serializers.ModelSerializer):
+    course = serializers.PrimaryKeyRelatedField(
+        queryset=CourseOffering.objects.all(),
+    )
+    teacher = serializers.PrimaryKeyRelatedField(
+        queryset=User.objects.all(),
+    )
+
+    class Meta:
+        model = TeachingAssignment
+        fields = ("course", "teacher", "start_date", "can_grade")
+        extra_kwargs = {
+            "can_grade": {"required": False, "default": False},
+        }
+
+    def to_internal_value(self, data):
+        allowed_fields = {"course", "teacher", "start_date", "can_grade"}
+        if hasattr(data, "keys"):
+            extra_fields = set(data.keys()) - allowed_fields
+            if extra_fields:
+                raise serializers.ValidationError({
+                    name: "Bu maydon qabul qilinmaydi."
+                    for name in extra_fields
+                })
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        teacher = attrs["teacher"]
+        if teacher.role != User.Role.TEACHER:
+            raise serializers.ValidationError({
+                "teacher": "Faqat o‘qituvchi rolidagi foydalanuvchi biriktiriladi."
+            })
+        if teacher.pk == self.context["request"].user.pk:
+            raise serializers.ValidationError({
+                "teacher": "O‘qituvchi o‘ziga kurs biriktira olmaydi."
+            })
+        return attrs
+
+    def create(self, validated_data):
+        try:
+            return replace_course_teacher(**validated_data)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                exc.message_dict if hasattr(exc, "message_dict") else exc.messages,
+            ) from exc
+
+
+class TeachingAssignmentCloseCommandSerializer(serializers.Serializer):
+    end_date = serializers.DateField()
+
+    def to_internal_value(self, data):
+        if hasattr(data, "keys"):
+            extra_fields = set(data.keys()) - {"end_date"}
+            if extra_fields:
+                raise serializers.ValidationError({
+                    name: "Bu maydon qabul qilinmaydi."
+                    for name in extra_fields
+                })
+        return super().to_internal_value(data)
+
+    def update(self, instance, validated_data):
+        try:
+            return close_teaching_assignment(
+                instance,
+                validated_data["end_date"],
+            )
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                exc.message_dict if hasattr(exc, "message_dict") else exc.messages,
+            ) from exc
+
+
+class ClassMembershipReadSerializer(serializers.ModelSerializer):
+    status = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = ClassMembership
+        fields = (
+            "id",
+            "pupil",
+            "school_class",
+            "start_date",
+            "end_date",
+            "status",
+        )
+        read_only_fields = fields
+
+
+class ClassMembershipCommandSerializer(serializers.Serializer):
+    pupil = serializers.PrimaryKeyRelatedField(queryset=User.objects.all())
+    school_class = serializers.PrimaryKeyRelatedField(
+        queryset=SchoolClass.objects.all(),
+    )
+    start_date = serializers.DateField()
+
+    def to_internal_value(self, data):
+        allowed_fields = {"pupil", "school_class", "start_date"}
+        if hasattr(data, "keys"):
+            extra_fields = set(data.keys()) - allowed_fields
+            if extra_fields:
+                raise serializers.ValidationError({
+                    name: "Bu maydon qabul qilinmaydi."
+                    for name in extra_fields
+                })
+        return super().to_internal_value(data)
+
+    def validate_pupil(self, pupil):
+        if pupil.role != User.Role.PUPIL:
+            raise serializers.ValidationError(
+                "Faqat o‘quvchi rolidagi foydalanuvchini sinfga biriktirish mumkin."
+            )
+        return pupil
+
+    def create(self, validated_data):
+        try:
+            return enroll_pupil_in_class(**validated_data)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                exc.message_dict if hasattr(exc, "message_dict") else exc.messages,
+            ) from exc
+
+
+class CoursePupilRosterSerializer(serializers.ModelSerializer):
+    pupil_id = serializers.IntegerField(read_only=True)
+    first_name = serializers.CharField(source="pupil.first_name", read_only=True)
+    last_name = serializers.CharField(source="pupil.last_name", read_only=True)
+
+    class Meta:
+        model = Enrollment
+        fields = ("pupil_id", "first_name", "last_name")
+        read_only_fields = fields
+
+
+class CourseEnrollmentSyncCommandSerializer(serializers.Serializer):
+    def to_internal_value(self, data):
+        if hasattr(data, "keys") and data:
+            raise serializers.ValidationError(
+                "Bu amal request body maydonlarini qabul qilmaydi."
+            )
+        return super().to_internal_value(data)
+
+    def create(self, validated_data):
+        try:
+            course = self.context["course"]
+            return {
+                "course_id": course.pk,
+                "created_count": sync_course_enrollments(course),
+            }
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                exc.message_dict if hasattr(exc, "message_dict") else exc.messages,
+            ) from exc
+
+
+class CourseEnrollmentSyncResultSerializer(serializers.Serializer):
+    course_id = serializers.IntegerField(read_only=True)
+    created_count = serializers.IntegerField(read_only=True)
 
 
 class AcademicYearReadSerializer(serializers.ModelSerializer):

@@ -1,6 +1,7 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
+from django.contrib.auth.models import Permission
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -17,6 +18,7 @@ from academics.models import (
     TeachingAssignment,
     Term,
 )
+from academics.services import close_teaching_assignment
 from learning.models import Topic
 
 
@@ -304,32 +306,32 @@ def test_closed_term_blocks_topic_writes_without_removing_published_history(
 
 
 @pytest.mark.django_db
-def test_topic_create_requires_session_csrf_token(topic_api_data):
+def test_topic_create_uses_jwt_without_requiring_csrf(topic_api_data):
     client = APIClient(enforce_csrf_checks=True)
-    csrf_token = client.get('/api/v1/auth/csrf/').data['csrfToken']
-    assert client.login(
-        username=topic_api_data['teacher_a'].username,
-        password='safe-test-password',
-    )
     payload = {
         'course': topic_api_data['course_a'].pk,
         'term': topic_api_data['term'].pk,
-        'title': 'CSRF-protected draft',
+        'title': 'JWT draft without CSRF',
         'objective': 'Synthetic objective.',
         'order': 3,
     }
+    anonymous_response = client.post('/api/v1/topics/', payload, format='json')
+    assert anonymous_response.status_code == status.HTTP_401_UNAUTHORIZED
 
-    rejected_response = client.post('/api/v1/topics/', payload, format='json')
-    accepted_response = client.post(
-        '/api/v1/topics/',
-        payload,
+    login = client.post(
+        '/api/v1/auth/login/',
+        {
+            'username': topic_api_data['teacher_a'].username,
+            'password': 'safe-test-password',
+        },
         format='json',
-        HTTP_X_CSRFTOKEN=csrf_token,
     )
+    assert login.status_code == status.HTTP_200_OK
+    client.credentials(HTTP_AUTHORIZATION=f"Bearer {login.data['access']}")
+    created_response = client.post('/api/v1/topics/', payload, format='json')
 
-    assert rejected_response.status_code == status.HTTP_403_FORBIDDEN
-    assert accepted_response.status_code == status.HTTP_201_CREATED
-    assert accepted_response.data['state'] == Topic.State.DRAFT
+    assert created_response.status_code == status.HTTP_201_CREATED
+    assert created_response.data['state'] == Topic.State.DRAFT
 
 
 @pytest.mark.django_db
@@ -585,6 +587,124 @@ def test_publish_is_idempotent_and_preserves_original_published_at(
 
 
 @pytest.mark.django_db
+def test_teacher_create_patch_publish_and_pupil_read_contract(topic_api_data):
+    teacher_client = APIClient()
+    teacher_client.force_authenticate(user=topic_api_data['teacher_a'])
+    pupil_client = APIClient()
+    pupil_client.force_authenticate(user=topic_api_data['pupil_a'])
+
+    created = teacher_client.post(
+        '/api/v1/topics/',
+        {
+            'course': topic_api_data['course_a'].pk,
+            'term': topic_api_data['term'].pk,
+            'title': 'Workflow draft',
+            'objective': 'A complete synthetic workflow.',
+            'order': 3,
+        },
+        format='json',
+    )
+    assert created.status_code == status.HTTP_201_CREATED
+    expected_fields = {
+        'id',
+        'course',
+        'term',
+        'title',
+        'objective',
+        'order',
+        'state',
+        'published_at',
+        'archived_at',
+    }
+    assert set(created.data) == expected_fields
+    assert created.data['state'] == Topic.State.DRAFT
+    assert created.data['published_at'] is None
+
+    topic_url = f"/api/v1/topics/{created.data['id']}/"
+    publish_url = f'{topic_url}publish/'
+    hidden_draft = pupil_client.get(topic_url)
+    pupil_list_before_publish = pupil_client.get(
+        f"/api/v1/courses/{topic_api_data['course_a'].pk}/topics/"
+    )
+    assert hidden_draft.status_code == status.HTTP_404_NOT_FOUND
+    assert created.data['id'] not in {
+        item['id'] for item in pupil_list_before_publish.data
+    }
+
+    patched = teacher_client.patch(
+        topic_url,
+        {
+            'title': 'Workflow updated',
+            'objective': 'Patched before publication.',
+        },
+        format='json',
+    )
+    assert patched.status_code == status.HTTP_200_OK
+    assert set(patched.data) == expected_fields
+    assert patched.data['title'] == 'Workflow updated'
+    assert patched.data['state'] == Topic.State.DRAFT
+    assert patched.data['published_at'] is None
+
+    published = teacher_client.post(publish_url, {}, format='json')
+    assert published.status_code == status.HTTP_200_OK
+    assert set(published.data) == expected_fields
+    assert published.data['state'] == Topic.State.PUBLISHED
+    assert published.data['title'] == 'Workflow updated'
+    assert published.data['published_at'] is not None
+    original_timestamp = published.data['published_at']
+    repeated_publish = teacher_client.post(publish_url, {}, format='json')
+    assert repeated_publish.status_code == status.HTTP_200_OK
+    assert repeated_publish.data['published_at'] == original_timestamp
+
+    pupil_detail = pupil_client.get(topic_url)
+    pupil_list = pupil_client.get(
+        f"/api/v1/courses/{topic_api_data['course_a'].pk}/topics/"
+    )
+    assert pupil_detail.status_code == status.HTTP_200_OK
+    assert pupil_detail.data == published.data
+    assert created.data['id'] in {item['id'] for item in pupil_list.data}
+
+
+@pytest.mark.django_db
+def test_academic_operator_does_not_bypass_teacher_course_scope(topic_api_data):
+    operator = User.objects.create_user(
+        username='topic-academic-operator',
+        password='safe-test-password',
+        role=User.Role.TEACHER,
+    )
+    permission = Permission.objects.get(
+        content_type__app_label='accounts',
+        codename='manage_academics',
+    )
+    operator.user_permissions.add(permission)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+
+    create_response = client.post(
+        '/api/v1/topics/',
+        {
+            'course': topic_api_data['course_a'].pk,
+            'term': topic_api_data['term'].pk,
+            'title': 'Operator without assignment',
+            'objective': 'Capability is not course assignment.',
+            'order': 3,
+        },
+        format='json',
+    )
+    publish_response = client.post(
+        f"/api/v1/topics/{topic_api_data['draft'].pk}/publish/",
+        {},
+        format='json',
+    )
+
+    assert create_response.status_code == status.HTTP_404_NOT_FOUND
+    assert publish_response.status_code == status.HTTP_404_NOT_FOUND
+    assert not Topic.objects.filter(title='Operator without assignment').exists()
+    topic_api_data['draft'].refresh_from_db()
+    assert topic_api_data['draft'].state == Topic.State.DRAFT
+
+
+@pytest.mark.django_db
 def test_publishing_already_published_topic_is_idempotent(topic_api_data):
     client = APIClient()
     client.force_authenticate(user=topic_api_data['teacher_a'])
@@ -700,3 +820,46 @@ def test_destroy_and_put_remain_unavailable(topic_api_data):
     assert delete_response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
     assert put_response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
     assert Topic.objects.filter(pk=topic_api_data['draft'].pk).exists()
+
+
+@pytest.mark.django_db
+def test_teacher_cannot_write_after_assignment_interval_ends(topic_api_data):
+    assignment = TeachingAssignment.objects.get(
+        course=topic_api_data['course_a'],
+        teacher=topic_api_data['teacher_a'],
+    )
+    close_teaching_assignment(
+        assignment,
+        timezone.localdate() - timedelta(days=1),
+    )
+    client = APIClient()
+    client.force_authenticate(user=topic_api_data['teacher_a'])
+
+    create_response = client.post(
+        "/api/v1/topics/",
+        {
+            "course": topic_api_data['course_a'].pk,
+            "term": topic_api_data['term'].pk,
+            "title": "New topic",
+            "objective": "New objective",
+            "order": 2,
+        },
+        format="json",
+    )
+    update_response = client.patch(
+        f"/api/v1/topics/{topic_api_data['draft'].pk}/",
+        {"title": "Changed draft"},
+        format="json",
+    )
+    publish_response = client.post(
+        f"/api/v1/topics/{topic_api_data['draft'].pk}/publish/",
+        {},
+        format='json',
+    )
+
+    assert create_response.status_code == status.HTTP_404_NOT_FOUND
+    assert update_response.status_code == status.HTTP_404_NOT_FOUND
+    assert publish_response.status_code == status.HTTP_404_NOT_FOUND
+    topic_api_data['draft'].refresh_from_db()
+    assert topic_api_data['draft'].state == Topic.State.DRAFT
+    assert topic_api_data['draft'].published_at is None

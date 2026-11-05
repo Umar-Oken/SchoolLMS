@@ -25,7 +25,7 @@ from learning.serializers import (
     TopicUpdateSerializer,
 )
 from learning.services import publish_topic
-from root.openapi import CSRF_HEADER, common_error_responses
+from root.openapi import common_error_responses
 
 
 class IsTopicWriteTeacher(BasePermission):
@@ -77,7 +77,6 @@ class IsTopicWriteTeacher(BasePermission):
             'published_at server tomonidan boshqariladi; term course yiliga mos bo‘lishi kerak.'
         ),
         tags=['Learning'],
-        parameters=[CSRF_HEADER],
         request=TopicCreateSerializer,
         responses={
             201: TopicReadSerializer,
@@ -112,7 +111,6 @@ class IsTopicWriteTeacher(BasePermission):
                 required=True,
                 description='Tahrirlanadigan draft mavzu IDsi.',
             ),
-            CSRF_HEADER,
         ],
         request=TopicUpdateSerializer,
         responses={
@@ -176,7 +174,6 @@ class TopicViewSet(
                 required=True,
                 description='Arxivlanadigan mavzu IDsi.',
             ),
-            CSRF_HEADER,
         ],
         request=None,
         responses={
@@ -226,7 +223,6 @@ class TopicViewSet(
                 required=True,
                 description='Nashr qilinadigan draft mavzu IDsi.',
             ),
-            CSRF_HEADER,
         ],
         request=None,
         responses={

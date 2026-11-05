@@ -111,6 +111,7 @@ class SchoolClass(models.Model):
 class Subject(models.Model):
     code = models.CharField(max_length=32, unique=True)
     title = models.CharField(max_length=200)
+    archived_at = models.DateTimeField(blank=True, null=True)
 
     class Meta:
         ordering = ['title', 'id']

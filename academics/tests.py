@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 from typing import cast
 
@@ -12,6 +12,7 @@ from django.core.management import call_command, CommandError
 from django.db import IntegrityError, transaction
 from django.db.models.deletion import ProtectedError
 from django.test import override_settings
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -34,7 +35,11 @@ from academics.services import (
     enroll_pupil_in_class,
     replace_course_teacher,
 )
-from academics.views import IsCoursePupil, IsCourseTeacher
+from academics.views import (
+    IsCoursePupil,
+    IsCourseTeacher,
+    teacher_course_scope,
+)
 from learning.models import Topic
 
 
@@ -829,6 +834,7 @@ def test_catalog_options_are_scoped_read_only_lists(course_api_data):
     assert classes.status_code == status.HTTP_200_OK
     assert any(item['id'] == class_a.pk for item in classes.data)
     assert subjects.status_code == status.HTTP_200_OK
+    assert set(subjects.data[0]) == {'id', 'code', 'title'}
     assert unused_subject.pk in {item['id'] for item in subjects.data}
     assert course_api_data['course_a'].subject_id not in {
         item['id'] for item in subjects.data
@@ -970,8 +976,12 @@ def test_teacher_history_is_readable_but_closed_or_non_grading_assignment_cannot
     write_request = SimpleNamespace(user=teacher, method='PATCH')
     assert permission.has_object_permission(write_request, None, course)
 
-    close_teaching_assignment(old_assignment, date(2027, 1, 31))
-    assign_teacher(course, teacher, date(2027, 2, 1), can_grade=False)
+    replacement_date = timezone.localdate()
+    close_teaching_assignment(
+        old_assignment,
+        replacement_date - timedelta(days=1),
+    )
+    assign_teacher(course, teacher, replacement_date, can_grade=False)
     client = APIClient()
     client.force_authenticate(user=teacher)
     read_request = SimpleNamespace(user=teacher, method='GET')
@@ -986,8 +996,8 @@ def test_teacher_history_is_readable_but_closed_or_non_grading_assignment_cannot
 def test_course_endpoints_reject_anonymous_requests():
     client = APIClient()
 
-    assert client.get('/api/v1/courses/').status_code == status.HTTP_403_FORBIDDEN
-    assert client.get('/api/v1/courses/1/').status_code == status.HTTP_403_FORBIDDEN
+    assert client.get('/api/v1/courses/').status_code == status.HTTP_401_UNAUTHORIZED
+    assert client.get('/api/v1/courses/1/').status_code == status.HTTP_401_UNAUTHORIZED
 
 
 @pytest.fixture
@@ -1005,43 +1015,36 @@ def csrf_client():
 
 
 @pytest.mark.django_db
-def test_login_rejects_missing_csrf_token(csrf_client, login_user):
+def test_login_does_not_require_csrf_token(csrf_client, login_user):
     response = csrf_client.post(
         '/api/v1/auth/login/',
         {'username': login_user.username, 'password': 'synthetic-valid-password'},
         format='json',
     )
 
-    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert response.status_code == status.HTTP_200_OK
+    assert set(response.data) == {'access', 'refresh'}
     assert '_auth_user_id' not in csrf_client.session
 
 
 @pytest.mark.django_db
-def test_csrf_endpoint_sets_cookie_and_valid_login_rotates_session(
+def test_csrf_endpoint_remains_available_but_login_returns_jwts(
     csrf_client,
     login_user,
 ):
     csrf_response = csrf_client.get('/api/v1/auth/csrf/')
-    csrf_token = csrf_response.data['csrfToken']
     assert csrf_response.status_code == status.HTTP_200_OK
     assert 'csrftoken' in csrf_client.cookies
-
-    session = csrf_client.session
-    session['pre_login'] = 'session'
-    session.save()
-    old_session_key = session.session_key
 
     response = csrf_client.post(
         '/api/v1/auth/login/',
         {'username': login_user.username, 'password': 'synthetic-valid-password'},
         format='json',
-        HTTP_X_CSRFTOKEN=csrf_token,
     )
 
     assert response.status_code == status.HTTP_200_OK
-    assert csrf_client.session['_auth_user_id'] == str(login_user.pk)
-    assert csrf_client.session.session_key != old_session_key
-    assert response.data == {'detail': 'Muvaffaqiyatli tizimga kirildi.'}
+    assert set(response.data) == {'access', 'refresh'}
+    assert '_auth_user_id' not in csrf_client.session
 
 
 @pytest.mark.django_db
@@ -1059,17 +1062,13 @@ def test_login_failure_is_generic_and_does_not_log_secrets(
     password,
     caplog,
 ):
-    csrf_token = csrf_client.get('/api/v1/auth/csrf/').data['csrfToken']
-
     response = csrf_client.post(
         '/api/v1/auth/login/',
         {'username': username, 'password': password},
         format='json',
-        HTTP_X_CSRFTOKEN=csrf_token,
     )
 
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.data == {'detail': 'Login yoki parol noto‘g‘ri.'}
+    assert response.status_code == status.HTTP_401_UNAUTHORIZED
     assert username not in response.content.decode()
     assert password not in response.content.decode()
     assert username not in caplog.text
@@ -1153,12 +1152,12 @@ def test_current_user_profile_rejects_forbidden_fields(login_user, forbidden_dat
 def test_current_user_profile_is_private():
     client = APIClient()
 
-    assert client.get('/api/v1/me/').status_code == status.HTTP_403_FORBIDDEN
+    assert client.get('/api/v1/me/').status_code == status.HTTP_401_UNAUTHORIZED
     assert client.patch(
         '/api/v1/me/',
         {'first_name': 'Nope'},
         format='json',
-    ).status_code == status.HTTP_403_FORBIDDEN
+    ).status_code == status.HTTP_401_UNAUTHORIZED
 
 
 @pytest.mark.django_db
@@ -1178,31 +1177,39 @@ def test_current_user_profile_rejects_put(login_user):
 
 
 @pytest.mark.django_db
-def test_logout_requires_csrf_and_revokes_session_for_private_course_api(
+def test_logout_blacklists_refresh_without_csrf(
     csrf_client,
     course_api_data,
 ):
     pupil = course_api_data['pupil_a']
-    csrf_token = csrf_client.get('/api/v1/auth/csrf/').data['csrfToken']
-    assert csrf_client.login(
-        username=pupil.username,
-        password='safe-test-password',
+    login = csrf_client.post(
+        '/api/v1/auth/login/',
+        {'username': pupil.username, 'password': 'safe-test-password'},
+        format='json',
+    )
+    assert login.status_code == status.HTTP_200_OK
+    csrf_client.credentials(
+        HTTP_AUTHORIZATION=f"Bearer {login.data['access']}"
     )
 
-    csrf_rejected = csrf_client.post('/api/v1/auth/logout/', format='json')
-    assert csrf_rejected.status_code == status.HTTP_403_FORBIDDEN
+    missing_refresh = csrf_client.post('/api/v1/auth/logout/', {}, format='json')
+    assert missing_refresh.status_code == status.HTTP_400_BAD_REQUEST
     assert csrf_client.get('/api/v1/courses/').status_code == status.HTTP_200_OK
 
     logout_response = csrf_client.post(
         '/api/v1/auth/logout/',
+        {'refresh': login.data['refresh']},
         format='json',
-        HTTP_X_CSRFTOKEN=csrf_token,
     )
 
-    assert logout_response.status_code == status.HTTP_200_OK
-    assert logout_response.data == {'detail': 'Tizimdan chiqildi.'}
-    assert '_auth_user_id' not in csrf_client.session
-    assert csrf_client.get('/api/v1/courses/').status_code == status.HTTP_403_FORBIDDEN
+    assert logout_response.status_code == status.HTTP_204_NO_CONTENT
+    assert csrf_client.get('/api/v1/courses/').status_code == status.HTTP_200_OK
+    refresh_response = APIClient().post(
+        '/api/v1/auth/token/refresh/',
+        {'refresh': login.data['refresh']},
+        format='json',
+    )
+    assert refresh_response.status_code == status.HTTP_401_UNAUTHORIZED
 
 
 @pytest.mark.django_db
@@ -1244,24 +1251,24 @@ def test_change_password_rejects_invalid_passwords(
 
 
 @pytest.mark.django_db
-def test_must_change_password_gates_courses_and_rotates_only_current_session(
+def test_must_change_password_gates_courses_and_revokes_old_jwts(
     csrf_client,
     course_api_data,
 ):
     pupil = course_api_data['pupil_a']
     pupil.must_change_password = True
     pupil.save(update_fields=['must_change_password'])
-    other_client = APIClient()
-    assert csrf_client.login(
-        username=pupil.username,
-        password='safe-test-password',
-    )
-    assert other_client.login(
-        username=pupil.username,
-        password='safe-test-password',
-    )
-    old_current_session_key = csrf_client.session.session_key
-    csrf_token = csrf_client.get('/api/v1/auth/csrf/').data['csrfToken']
+    clients = [csrf_client, APIClient(enforce_csrf_checks=True)]
+    for client in clients:
+        login = client.post(
+            '/api/v1/auth/login/',
+            {'username': pupil.username, 'password': 'safe-test-password'},
+            format='json',
+        )
+        assert login.status_code == status.HTTP_200_OK
+        client.credentials(
+            HTTP_AUTHORIZATION=f"Bearer {login.data['access']}"
+        )
 
     assert csrf_client.get('/api/v1/courses/').status_code == status.HTTP_403_FORBIDDEN
     course_id = course_api_data['course_a'].pk
@@ -1271,16 +1278,6 @@ def test_must_change_password_gates_courses_and_rotates_only_current_session(
     )
     assert csrf_client.get('/api/v1/me/').status_code == status.HTTP_200_OK
 
-    csrf_rejected = csrf_client.post(
-        '/api/v1/me/change-password/',
-        {
-            'current_password': 'safe-test-password',
-            'new_password': 'new-safe-password-2026',
-        },
-        format='json',
-    )
-    assert csrf_rejected.status_code == status.HTTP_403_FORBIDDEN
-
     response = csrf_client.post(
         '/api/v1/me/change-password/',
         {
@@ -1288,7 +1285,6 @@ def test_must_change_password_gates_courses_and_rotates_only_current_session(
             'new_password': 'new-safe-password-2026',
         },
         format='json',
-        HTTP_X_CSRFTOKEN=csrf_token,
     )
 
     assert response.status_code == status.HTTP_200_OK
@@ -1296,31 +1292,42 @@ def test_must_change_password_gates_courses_and_rotates_only_current_session(
     pupil.refresh_from_db()
     assert not pupil.must_change_password
     assert pupil.check_password('new-safe-password-2026')
-    assert csrf_client.session.session_key != old_current_session_key
-    assert csrf_client.get('/api/v1/courses/').status_code == status.HTTP_200_OK
+    for client in clients:
+        assert client.get('/api/v1/courses/').status_code == status.HTTP_401_UNAUTHORIZED
 
-    assert other_client.get('/api/v1/courses/').status_code == status.HTTP_403_FORBIDDEN
-    assert '_auth_user_id' not in other_client.session
+    new_login = APIClient().post(
+        '/api/v1/auth/login/',
+        {'username': pupil.username, 'password': 'new-safe-password-2026'},
+        format='json',
+    )
+    assert new_login.status_code == status.HTTP_200_OK
+    csrf_client.credentials(
+        HTTP_AUTHORIZATION=f"Bearer {new_login.data['access']}"
+    )
+    assert csrf_client.get('/api/v1/courses/').status_code == status.HTTP_200_OK
 
 
 @pytest.mark.django_db
 def test_must_change_password_user_can_logout(csrf_client, login_user):
     login_user.must_change_password = True
     login_user.save(update_fields=['must_change_password'])
-    assert csrf_client.login(
-        username=login_user.username,
-        password='synthetic-valid-password',
+    login = csrf_client.post(
+        '/api/v1/auth/login/',
+        {'username': login_user.username, 'password': 'synthetic-valid-password'},
+        format='json',
     )
-    csrf_token = csrf_client.get('/api/v1/auth/csrf/').data['csrfToken']
+    assert login.status_code == status.HTTP_200_OK
+    csrf_client.credentials(
+        HTTP_AUTHORIZATION=f"Bearer {login.data['access']}"
+    )
 
     response = csrf_client.post(
         '/api/v1/auth/logout/',
+        {'refresh': login.data['refresh']},
         format='json',
-        HTTP_X_CSRFTOKEN=csrf_token,
     )
 
-    assert response.status_code == status.HTTP_200_OK
-    assert '_auth_user_id' not in csrf_client.session
+    assert response.status_code == status.HTTP_204_NO_CONTENT
 
 
 @pytest.mark.django_db
@@ -1502,3 +1509,839 @@ def test_referenced_term_cannot_be_deleted(course_api_data):
 
     assert Term.objects.filter(pk=term.pk).exists()
     assert Topic.objects.filter(term=term, state=Topic.State.PUBLISHED).exists()
+
+
+@pytest.mark.django_db
+def test_school_class_catalog_requires_operator_for_writes(course_api_data):
+    teacher = course_api_data['teacher_a']
+    pupil = course_api_data['pupil_a']
+    class_payload = {
+        'year': course_api_data['course_a'].school_class.year_id,
+        'grade_level': 8,
+        'section': 'C',
+    }
+
+    for user in (teacher, pupil):
+        client = APIClient()
+        client.force_authenticate(user=user)
+        assert client.get('/api/v1/admin/classes/').status_code == (
+            status.HTTP_200_OK
+        )
+        assert client.post(
+            '/api/v1/admin/classes/',
+            class_payload,
+            format='json',
+        ).status_code == status.HTTP_403_FORBIDDEN
+        assert client.patch(
+            f"/api/v1/admin/classes/{course_api_data['course_a'].school_class_id}/",
+            {'section': 'Z'},
+            format='json',
+        ).status_code == status.HTTP_403_FORBIDDEN
+
+    operator = User.objects.create_user(
+        username='class-catalog-operator',
+        password='safe-test-password',
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+
+    created = client.post(
+        '/api/v1/admin/classes/',
+        class_payload,
+        format='json',
+    )
+    assert created.status_code == status.HTTP_201_CREATED
+    assert created.data['year'] == class_payload['year']
+    assert created.data['grade_level'] == 8
+    assert created.data['section'] == 'C'
+
+    updated = client.patch(
+        f"/api/v1/admin/classes/{created.data['id']}/",
+        {'section': 'D'},
+        format='json',
+    )
+    assert updated.status_code == status.HTTP_200_OK
+    assert updated.data['section'] == 'D'
+
+
+@pytest.mark.django_db
+def test_school_class_catalog_rejects_duplicate_and_preserves_year_identity(
+    course_api_data,
+):
+    historic_class = course_api_data['course_a'].school_class
+    next_year = AcademicYear.objects.create(
+        start_date=date(2027, 9, 1),
+        end_date=date(2028, 6, 30),
+        label='2027–2028',
+    )
+    operator = User.objects.create_user(
+        username='class-identity-operator',
+        password='safe-test-password',
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+
+    duplicate = client.post(
+        '/api/v1/admin/classes/',
+        {
+            'year': historic_class.year_id,
+            'grade_level': historic_class.grade_level,
+            'section': historic_class.section,
+        },
+        format='json',
+    )
+    assert duplicate.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'section' in duplicate.data
+    invalid_grade = client.post(
+        '/api/v1/admin/classes/',
+        {
+            'year': historic_class.year_id,
+            'grade_level': 12,
+            'section': 'C',
+        },
+        format='json',
+    )
+    assert invalid_grade.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'grade_level' in invalid_grade.data
+
+    moved = client.patch(
+        f'/api/v1/admin/classes/{historic_class.pk}/',
+        {
+            'year': next_year.pk,
+            'grade_level': 8,
+            'section': historic_class.section,
+        },
+        format='json',
+    )
+    renamed = client.patch(
+        f'/api/v1/admin/classes/{historic_class.pk}/',
+        {'grade_level': 8},
+        format='json',
+    )
+    assert moved.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'year' in moved.data
+    assert renamed.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'grade_level' in renamed.data
+
+    historic_class.refresh_from_db()
+    assert historic_class.year_id != next_year.pk
+    assert historic_class.grade_level == 7
+    assert historic_class.section == 'A'
+    assert SchoolClass.objects.filter(
+        year=next_year,
+        grade_level=8,
+        section='A',
+    ).count() == 0
+
+
+@pytest.mark.django_db
+def test_subject_catalog_requires_operator_and_rejects_duplicate_code(
+    course_api_data,
+):
+    teacher = course_api_data['teacher_a']
+    pupil = course_api_data['pupil_a']
+    for user in (teacher, pupil):
+        client = APIClient()
+        client.force_authenticate(user=user)
+        assert client.get('/api/v1/catalog/subjects/').status_code == (
+            status.HTTP_200_OK
+        )
+        assert client.post(
+            '/api/v1/admin/subjects/',
+            {'code': 'NEW-SUBJECT', 'title': 'Yangi fan'},
+            format='json',
+        ).status_code == status.HTTP_403_FORBIDDEN
+        assert client.patch(
+            f"/api/v1/admin/subjects/{course_api_data['course_a'].subject_id}/",
+            {'title': 'Yangilangan fan'},
+            format='json',
+        ).status_code == status.HTTP_403_FORBIDDEN
+
+    operator = User.objects.create_user(
+        username='subject-catalog-operator',
+        password='safe-test-password',
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+
+    created = client.post(
+        '/api/v1/admin/subjects/',
+        {'code': 'NEW-SUBJECT', 'title': 'Yangi fan'},
+        format='json',
+    )
+    assert created.status_code == status.HTTP_201_CREATED
+    assert created.data['archived_at'] is None
+
+    duplicate = client.post(
+        '/api/v1/admin/subjects/',
+        {'code': 'NEW-SUBJECT', 'title': 'Takror fan'},
+        format='json',
+    )
+    assert duplicate.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'code' in duplicate.data
+
+    updated = client.patch(
+        f"/api/v1/admin/subjects/{created.data['id']}/",
+        {'title': 'Tahrirlangan fan'},
+        format='json',
+    )
+    assert updated.status_code == status.HTTP_200_OK
+    assert updated.data['title'] == 'Tahrirlangan fan'
+
+
+@pytest.mark.django_db
+def test_archiving_subject_preserves_course_history_and_hides_it_from_options(
+    course_api_data,
+):
+    subject = course_api_data['course_a'].subject
+    course = course_api_data['course_a']
+    assignment_id = course.teaching_assignments.get().pk
+    term = Term.objects.create(
+        year=course.school_class.year,
+        order=1,
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 11, 30),
+    )
+    historical_topic = Topic.objects.create(
+        course=course,
+        term=term,
+        title='Historical course topic',
+        objective='Keep associated history.',
+        order=1,
+        state=Topic.State.PUBLISHED,
+        published_at=timezone.now(),
+    )
+    other_class = SchoolClass.objects.create(
+        year=course.school_class.year,
+        grade_level=9,
+        section='C',
+    )
+    operator = User.objects.create_user(
+        username='subject-archive-operator',
+        password='safe-test-password',
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+
+    archived = client.post(
+        f'/api/v1/admin/subjects/{subject.pk}/archive/',
+        {},
+        format='json',
+    )
+
+    assert archived.status_code == status.HTTP_200_OK
+    assert archived.data['archived_at'] is not None
+    subject.refresh_from_db()
+    course.refresh_from_db()
+    assert subject.archived_at is not None
+    assert CourseOffering.objects.filter(pk=course.pk, subject=subject).exists()
+    assert TeachingAssignment.objects.filter(pk=assignment_id, course=course).exists()
+    assert Topic.objects.filter(pk=historical_topic.pk, course=course).exists()
+    assert not client.get('/api/v1/catalog/subjects/').data
+    available = client.get(
+        f'/api/v1/catalog/classes/{other_class.pk}/subjects/',
+    )
+    assert available.status_code == status.HTTP_200_OK
+    assert subject.pk not in {item['id'] for item in available.data}
+    assert client.delete(
+        f'/api/v1/admin/subjects/{subject.pk}/',
+    ).status_code == status.HTTP_405_METHOD_NOT_ALLOWED
+
+    create_course = client.post(
+        '/api/v1/admin/courses/',
+        {'school_class': other_class.pk, 'subject': subject.pk},
+        format='json',
+    )
+    assert create_course.status_code == status.HTTP_400_BAD_REQUEST
+    assert 'subject' in create_course.data
+
+
+@pytest.mark.django_db(transaction=True)
+def test_catalog_detail_reads_do_not_lock_rows_outside_a_transaction(
+    course_api_data,
+):
+    client = APIClient()
+    client.force_authenticate(user=course_api_data['teacher_a'])
+
+    class_response = client.get(
+        f"/api/v1/admin/classes/{course_api_data['course_a'].school_class_id}/",
+    )
+    subject_response = client.get(
+        f"/api/v1/admin/subjects/{course_api_data['course_a'].subject_id}/",
+    )
+
+    assert class_response.status_code == status.HTTP_200_OK
+    assert subject_response.status_code == status.HTTP_200_OK
+
+
+@pytest.mark.django_db
+def test_teacher_assignment_api_limits_teacher_profile_and_rejects_self_grant(
+    course_api_data,
+):
+    teacher = course_api_data["teacher_a"]
+    pupil = course_api_data["pupil_a"]
+    operator = User.objects.create_user(
+        username="assignment-operator",
+        first_name="Operator",
+        password="safe-test-password",
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    operator_client = APIClient()
+    operator_client.force_authenticate(user=operator)
+
+    teacher_list = operator_client.get("/api/v1/catalog/teachers/")
+    assert teacher_list.status_code == status.HTTP_200_OK
+    assert teacher.pk in {item["id"] for item in teacher_list.data}
+    assert pupil.pk not in {item["id"] for item in teacher_list.data}
+    assert set(teacher_list.data[0]) == {
+        "id",
+        "username",
+        "first_name",
+        "last_name",
+    }
+
+    teacher_client = APIClient()
+    teacher_client.force_authenticate(user=teacher)
+    self_grant = teacher_client.post(
+        "/api/v1/admin/teaching-assignments/",
+        {
+            "course": course_api_data["course_a"].pk,
+            "teacher": teacher.pk,
+            "start_date": timezone.localdate().isoformat(),
+            "can_grade": True,
+        },
+        format="json",
+    )
+    assert self_grant.status_code == status.HTTP_403_FORBIDDEN
+
+    pupil_assignment = operator_client.post(
+        "/api/v1/admin/teaching-assignments/",
+        {
+            "course": course_api_data["course_a"].pk,
+            "teacher": pupil.pk,
+            "start_date": timezone.localdate().isoformat(),
+            "can_grade": True,
+        },
+        format="json",
+    )
+    assert pupil_assignment.status_code == status.HTTP_400_BAD_REQUEST
+    assert "teacher" in pupil_assignment.data
+    assert not TeachingAssignment.objects.filter(teacher=pupil).exists()
+
+    operator_self_grant = operator_client.post(
+        "/api/v1/admin/teaching-assignments/",
+        {
+            "course": course_api_data["course_a"].pk,
+            "teacher": operator.pk,
+            "start_date": timezone.localdate().isoformat(),
+            "can_grade": True,
+        },
+        format="json",
+    )
+    assert operator_self_grant.status_code == status.HTTP_400_BAD_REQUEST
+    assert "teacher" in operator_self_grant.data
+
+    operator_self_assignment = operator_client.post(
+        "/api/v1/admin/teaching-assignments/",
+        {
+            "course": course_api_data["course_a"].pk,
+            "teacher": operator.pk,
+            "start_date": timezone.localdate().isoformat(),
+            "can_grade": False,
+        },
+        format="json",
+    )
+    assert operator_self_assignment.status_code == status.HTTP_400_BAD_REQUEST
+    assert "teacher" in operator_self_assignment.data
+    assert not TeachingAssignment.objects.filter(
+        course=course_api_data["course_a"],
+        teacher=operator,
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_superuser_can_manage_teacher_assignments_regardless_of_business_role(
+    course_api_data,
+):
+    superuser = User.objects.create_superuser(
+        username="academic-superuser",
+        password="synthetic-superuser-password",
+        role=User.Role.PUPIL,
+    )
+    client = APIClient()
+    client.force_authenticate(user=superuser)
+
+    response = client.get("/api/v1/catalog/teachers/")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert course_api_data["teacher_a"].pk in {
+        item["id"] for item in response.data
+    }
+
+
+@pytest.mark.django_db
+def test_replacing_course_teacher_closes_interval_and_preserves_history(
+    course_api_data,
+):
+    course = course_api_data["course_a"]
+    previous_teacher = course_api_data["teacher_a"]
+    new_teacher = course_api_data["teacher_b"]
+    old_assignment = TeachingAssignment.objects.get(
+        course=course,
+        teacher=previous_teacher,
+    )
+    old_assignment.can_grade = True
+    old_assignment.save(update_fields=["can_grade"])
+    term = Term.objects.create(
+        year=course.school_class.year,
+        order=1,
+        start_date=date(2026, 9, 1),
+        end_date=date(2027, 6, 30),
+    )
+    published_topic = Topic.objects.create(
+        course=course,
+        term=term,
+        title="Published history",
+        objective="Keep this published record.",
+        order=1,
+        state=Topic.State.PUBLISHED,
+        published_at=timezone.now(),
+    )
+    operator = User.objects.create_user(
+        username="assignment-replacer",
+        password="safe-test-password",
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+    start_date = timezone.localdate()
+
+    response = client.post(
+        "/api/v1/admin/teaching-assignments/",
+        {
+            "course": course.pk,
+            "teacher": new_teacher.pk,
+            "start_date": start_date.isoformat(),
+            "can_grade": False,
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.data["teacher"] == new_teacher.pk
+    assert response.data["can_grade"] is False
+    old_assignment.refresh_from_db()
+    published_topic.refresh_from_db()
+    assert old_assignment.end_date == start_date - timedelta(days=1)
+    assert old_assignment.teacher_id == previous_teacher.pk
+    assert old_assignment.can_grade is True
+    assert published_topic.state == Topic.State.PUBLISHED
+    assert published_topic.published_at is not None
+    assert TeachingAssignment.objects.filter(course=course).count() == 2
+    assert not teacher_course_scope(
+        previous_teacher,
+        active_only=True,
+        can_grade=True,
+    ).filter(pk=course.pk).exists()
+
+
+@pytest.mark.django_db
+def test_closing_assignment_ends_grading_scope_and_cannot_reclose(
+    course_api_data,
+):
+    course = course_api_data["course_a"]
+    teacher = course_api_data["teacher_a"]
+    assignment = TeachingAssignment.objects.get(
+        course=course,
+        teacher=teacher,
+    )
+    assignment.can_grade = True
+    assignment.save(update_fields=["can_grade"])
+    operator = User.objects.create_user(
+        username="assignment-closer",
+        password="safe-test-password",
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+    end_date = timezone.localdate() - timedelta(days=1)
+
+    response = client.post(
+        f"/api/v1/admin/teaching-assignments/{assignment.pk}/close/",
+        {"end_date": end_date.isoformat()},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data["end_date"] == end_date.isoformat()
+    assert response.data["can_grade"] is True
+    assert not teacher_course_scope(
+        teacher,
+        active_only=True,
+        can_grade=True,
+    ).filter(pk=course.pk).exists()
+    repeated = client.post(
+        f"/api/v1/admin/teaching-assignments/{assignment.pk}/close/",
+        {"end_date": end_date.isoformat()},
+        format="json",
+    )
+    assert repeated.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_future_assignment_is_not_yet_in_teacher_write_or_grading_scope(
+    course_api_data,
+):
+    teacher = User.objects.create_user(
+        username="future-assignment-teacher",
+        password="safe-test-password",
+        role=User.Role.TEACHER,
+    )
+    course = course_api_data["course_a"]
+    assign_teacher(
+        course,
+        teacher,
+        timezone.localdate() + timedelta(days=1),
+        can_grade=True,
+    )
+
+    assert teacher_course_scope(teacher).filter(pk=course.pk).exists()
+    assert not teacher_course_scope(
+        teacher,
+        active_only=True,
+        can_grade=True,
+    ).filter(pk=course.pk).exists()
+    request = SimpleNamespace(user=teacher, method="PATCH")
+    assert not IsCourseTeacher().has_object_permission(request, None, course)
+
+
+@pytest.mark.django_db
+def test_class_membership_api_transfers_pupil_and_preserves_enrollment_history(
+    course_api_data,
+):
+    pupil = course_api_data["pupil_a"]
+    old_course = course_api_data["course_a"]
+    new_course = course_api_data["course_b"]
+    old_membership = ClassMembership.objects.get(pupil=pupil)
+    old_enrollment = Enrollment.objects.get(pupil=pupil, course=old_course)
+    operator = User.objects.create_user(
+        username="membership-operator",
+        password="safe-test-password",
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+    effective_date = timezone.localdate()
+
+    response = client.post(
+        "/api/v1/admin/class-memberships/",
+        {
+            "pupil": pupil.pk,
+            "school_class": new_course.school_class_id,
+            "start_date": effective_date.isoformat(),
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+    assert response.data["pupil"] == pupil.pk
+    assert response.data["school_class"] == new_course.school_class_id
+    assert response.data["start_date"] == effective_date.isoformat()
+    assert response.data["status"] == MembershipStatus.ACTIVE
+    old_membership.refresh_from_db()
+    old_enrollment.refresh_from_db()
+    assert old_membership.status == MembershipStatus.CLOSED
+    assert old_membership.end_date == effective_date - timedelta(days=1)
+    assert old_enrollment.status == MembershipStatus.CLOSED
+    assert old_enrollment.end_date == effective_date - timedelta(days=1)
+    assert ClassMembership.objects.filter(pupil=pupil).count() == 2
+    assert Enrollment.objects.filter(pupil=pupil, course=old_course).count() == 1
+    assert Enrollment.objects.get(pupil=pupil, course=new_course).status == (
+        MembershipStatus.ACTIVE
+    )
+    assert ClassMembership.objects.filter(
+        pupil=pupil,
+        status=MembershipStatus.ACTIVE,
+    ).count() == 1
+
+
+@pytest.mark.django_db
+def test_class_membership_api_rejects_non_operator_and_non_pupil_targets(
+    course_api_data,
+):
+    client = APIClient()
+    client.force_authenticate(user=course_api_data["teacher_a"])
+    payload = {
+        "pupil": course_api_data["pupil_a"].pk,
+        "school_class": course_api_data["course_b"].school_class_id,
+        "start_date": timezone.localdate().isoformat(),
+    }
+
+    forbidden = client.post(
+        "/api/v1/admin/class-memberships/",
+        payload,
+        format="json",
+    )
+    assert forbidden.status_code == status.HTTP_403_FORBIDDEN
+    assert not ClassMembership.objects.filter(
+        pupil=course_api_data["pupil_a"],
+        school_class=course_api_data["course_b"].school_class,
+        status=MembershipStatus.ACTIVE,
+    ).exists()
+
+    operator = User.objects.create_user(
+        username="membership-role-operator",
+        password="safe-test-password",
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client.force_authenticate(user=operator)
+    payload["pupil"] = course_api_data["teacher_a"].pk
+
+    invalid_target = client.post(
+        "/api/v1/admin/class-memberships/",
+        payload,
+        format="json",
+    )
+
+    assert invalid_target.status_code == status.HTTP_400_BAD_REQUEST
+    assert "pupil" in invalid_target.data
+
+
+@pytest.mark.django_db
+def test_class_membership_api_rejects_overlapping_effective_date(
+    course_api_data,
+):
+    pupil = course_api_data["pupil_a"]
+    operator = User.objects.create_user(
+        username="membership-date-operator",
+        password="safe-test-password",
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+
+    response = client.post(
+        "/api/v1/admin/class-memberships/",
+        {
+            "pupil": pupil.pk,
+            "school_class": course_api_data["course_b"].school_class_id,
+            "start_date": date(2026, 8, 31).isoformat(),
+        },
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert ClassMembership.objects.filter(
+        pupil=pupil,
+        status=MembershipStatus.ACTIVE,
+    ).count() == 1
+    assert Enrollment.objects.filter(
+        pupil=pupil,
+        status=MembershipStatus.ACTIVE,
+    ).count() == 1
+
+
+@pytest.mark.django_db
+def test_class_membership_api_rolls_back_partial_transfer(
+    course_api_data,
+    monkeypatch,
+):
+    pupil = course_api_data["pupil_a"]
+    old_membership = ClassMembership.objects.get(pupil=pupil)
+    old_enrollment = Enrollment.objects.get(
+        pupil=pupil,
+        course=course_api_data["course_a"],
+    )
+    operator = User.objects.create_user(
+        username="membership-rollback-operator",
+        password="safe-test-password",
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+
+    def fail_save(self, *args, **kwargs):
+        raise RuntimeError("Sintetik enrollment yozuv xatosi")
+
+    monkeypatch.setattr(Enrollment, "save", fail_save)
+
+    with pytest.raises(RuntimeError, match="Sintetik enrollment yozuv xatosi"):
+        client.post(
+            "/api/v1/admin/class-memberships/",
+            {
+                "pupil": pupil.pk,
+                "school_class": course_api_data["course_b"].school_class_id,
+                "start_date": timezone.localdate().isoformat(),
+            },
+            format="json",
+        )
+
+    old_membership.refresh_from_db()
+    old_enrollment.refresh_from_db()
+    assert old_membership.status == MembershipStatus.ACTIVE
+    assert old_membership.end_date is None
+    assert old_enrollment.status == MembershipStatus.ACTIVE
+    assert old_enrollment.end_date is None
+    assert ClassMembership.objects.filter(pupil=pupil).count() == 1
+    assert Enrollment.objects.filter(pupil=pupil).count() == 1
+
+
+@pytest.mark.django_db
+def test_course_pupil_roster_is_scoped_and_returns_minimal_pupil_data(
+    course_api_data,
+):
+    client = APIClient()
+    client.force_authenticate(user=course_api_data["teacher_a"])
+
+    own_roster = client.get(
+        f'/api/v1/courses/{course_api_data["course_a"].pk}/pupils/',
+    )
+    other_roster = client.get(
+        f'/api/v1/courses/{course_api_data["course_b"].pk}/pupils/',
+    )
+
+    assert own_roster.status_code == status.HTTP_200_OK
+    assert own_roster.data == [
+        {
+            "pupil_id": course_api_data["pupil_a"].pk,
+            "first_name": "",
+            "last_name": "",
+        }
+    ]
+    assert other_roster.status_code == status.HTTP_404_NOT_FOUND
+    assert set(own_roster.data[0]) == {"pupil_id", "first_name", "last_name"}
+
+    client.force_authenticate(user=course_api_data["pupil_a"])
+    denied = client.get(
+        f'/api/v1/courses/{course_api_data["course_a"].pk}/pupils/',
+    )
+    assert denied.status_code == status.HTTP_404_NOT_FOUND
+
+    operator = User.objects.create_user(
+        username="roster-operator",
+        password="safe-test-password",
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client.force_authenticate(user=operator)
+    operator_roster = client.get(
+        f'/api/v1/courses/{course_api_data["course_b"].pk}/pupils/',
+    )
+    assert operator_roster.status_code == status.HTTP_200_OK
+    assert operator_roster.data[0]["pupil_id"] == course_api_data["pupil_b"].pk
+
+
+@pytest.mark.django_db
+def test_course_enrollment_sync_is_idempotent_and_preserves_history(
+    course_api_data,
+):
+    class_a = course_api_data["course_a"].school_class
+    today = timezone.localdate()
+    new_pupil = User.objects.create_user(
+        username="sync-active-pupil",
+        password="safe-test-password",
+        role=User.Role.PUPIL,
+    )
+    enroll_pupil_in_class(new_pupil, class_a, today - timedelta(days=5))
+
+    inactive_pupil = User.objects.create_user(
+        username="sync-inactive-pupil",
+        password="safe-test-password",
+        role=User.Role.PUPIL,
+    )
+    ClassMembership.objects.create(
+        pupil=inactive_pupil,
+        school_class=class_a,
+        start_date=today - timedelta(days=10),
+        end_date=today - timedelta(days=1),
+        status=MembershipStatus.CLOSED,
+    )
+
+    new_course = CourseOffering.objects.create(
+        school_class=class_a,
+        subject=Subject.objects.create(
+            code="SYNC-COURSE",
+            title="Sinxronlash kursi",
+        ),
+    )
+    historical_enrollment = Enrollment.objects.create(
+        pupil=course_api_data["pupil_a"],
+        course=new_course,
+        start_date=today - timedelta(days=10),
+        end_date=today - timedelta(days=1),
+        status=MembershipStatus.CLOSED,
+    )
+    original_history = (
+        historical_enrollment.start_date,
+        historical_enrollment.end_date,
+        historical_enrollment.status,
+    )
+    operator = User.objects.create_user(
+        username="course-sync-operator",
+        password="safe-test-password",
+        role=User.Role.TEACHER,
+    )
+    grant_manage_academics(operator)
+    client = APIClient()
+    client.force_authenticate(user=operator)
+    url = f"/api/v1/admin/courses/{new_course.pk}/sync-enrollments/"
+
+    first_sync = client.post(url, {}, format="json")
+    second_sync = client.post(url, {}, format="json")
+
+    assert first_sync.status_code == status.HTTP_200_OK
+    assert first_sync.data == {"course_id": new_course.pk, "created_count": 1}
+    assert second_sync.status_code == status.HTTP_200_OK
+    assert second_sync.data == {"course_id": new_course.pk, "created_count": 0}
+    created_enrollment = Enrollment.objects.get(
+        pupil=new_pupil,
+        course=new_course,
+    )
+    assert created_enrollment.status == MembershipStatus.ACTIVE
+    assert created_enrollment.start_date == today - timedelta(days=5)
+    assert Enrollment.objects.filter(
+        pupil=new_pupil,
+        course=new_course,
+    ).count() == 1
+    historical_enrollment.refresh_from_db()
+    assert (
+        historical_enrollment.start_date,
+        historical_enrollment.end_date,
+        historical_enrollment.status,
+    ) == original_history
+    assert not Enrollment.objects.filter(
+        pupil=inactive_pupil,
+        course=new_course,
+    ).exists()
+    assert ClassMembership.objects.get(pupil=inactive_pupil).status == (
+        MembershipStatus.CLOSED
+    )
+
+
+@pytest.mark.django_db
+def test_course_enrollment_sync_requires_academic_operator(course_api_data):
+    client = APIClient()
+    client.force_authenticate(user=course_api_data["teacher_a"])
+
+    response = client.post(
+        f'/api/v1/admin/courses/{course_api_data["course_a"].pk}/sync-enrollments/',
+        {},
+        format="json",
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN

@@ -3,6 +3,7 @@ from datetime import date, timedelta
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from accounts.models import User
 from academics.models import (
@@ -75,6 +76,9 @@ def replace_course_teacher(course, teacher, start_date, can_grade=False):
 
 @transaction.atomic
 def close_teaching_assignment(assignment, end_date):
+    assignment = TeachingAssignment.objects.select_for_update().get(
+        pk=assignment.pk,
+    )
     if assignment.end_date is not None:
         raise ValidationError('Yopilgan biriktirishning sanasini qayta o‘zgartirib bo‘lmaydi.')
 
@@ -165,3 +169,51 @@ def enroll_pupil_in_class(pupil, school_class, start_date):
         enrollment.save()
 
     return membership
+
+
+@transaction.atomic
+def sync_course_enrollments(course):
+    course = (
+        CourseOffering.objects.select_for_update()
+        .select_related("school_class")
+        .get(pk=course.pk)
+    )
+    if course.archived_at is not None:
+        raise APIValidationError({
+            "course": "Arxivlangan kurs enrollmentlarini sinxronlab bo‘lmaydi."
+        })
+
+    today = timezone.localdate()
+    memberships = list(
+        ClassMembership.objects.select_for_update()
+        .filter(
+            school_class_id=course.school_class_id,
+            status=MembershipStatus.ACTIVE,
+            start_date__lte=today,
+            end_date__isnull=True,
+        )
+        .order_by("pupil_id", "pk")
+    )
+    if not memberships:
+        return 0
+
+    existing_pupil_ids = set(
+        Enrollment.objects.filter(
+            course=course,
+            pupil_id__in=[membership.pupil_id for membership in memberships],
+        ).values_list("pupil_id", flat=True)
+    )
+    created_count = 0
+    for membership in memberships:
+        if membership.pupil_id in existing_pupil_ids:
+            continue
+        enrollment = Enrollment(
+            pupil_id=membership.pupil_id,
+            course=course,
+            start_date=membership.start_date,
+        )
+        enrollment.full_clean()
+        enrollment.save()
+        created_count += 1
+
+    return created_count

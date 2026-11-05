@@ -957,6 +957,7 @@ Scope cheklovi: Hisob paroli, capability grant API yoki dars o‘rinbosar jadval
 Qabul mezoni/tekshiruv:
   - Pupilni teacher sifatida biriktirish va self-grant oddiy teacherda rad.
   - Interval tugagach eski teacher yangi grade/write qilmasin.
+
 Rasmiy manbalar:
   [R10] Permissions: https://www.django-rest-framework.org/api-guide/permissions/
   [R14] Transactions: https://docs.djangoproject.com/en/5.2/topics/db/transactions/

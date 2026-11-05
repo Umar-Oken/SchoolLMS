@@ -10,6 +10,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 import os
+from datetime import timedelta
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
@@ -75,6 +76,7 @@ INSTALLED_APPS = [
     'learning.apps.LearningConfig',
     'apps.apps.AppsConfig',
     'rest_framework',
+    'rest_framework_simplejwt.token_blacklist',
     'drf_spectacular',
     'drf_spectacular_sidecar',
 ]
@@ -113,7 +115,7 @@ AUTH_USER_MODEL = 'accounts.User'
 REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.SessionAuthentication',
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',
@@ -121,15 +123,24 @@ REST_FRAMEWORK = {
     ],
 }
 
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
+    'ROTATE_REFRESH_TOKENS': True,
+    'BLACKLIST_AFTER_ROTATION': True,
+    'CHECK_REVOKE_TOKEN': True,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+}
+
 SPECTACULAR_SETTINGS = {
     'TITLE': 'School LMS API',
     'DESCRIPTION': (
-        'Maktab LMS API. Autentifikatsiya Django session cookie va CSRF '
-        'himoyasi orqali ishlaydi.'
+        'Maktab LMS API. API endpointlar JWT Bearer orqali autentifikatsiya '
+        'qilinadi; Django admin session va CSRF himoyasida qoladi.'
     ),
     'VERSION': '1.0.0',
     'TAGS': [
-        {'name': 'Auth', 'description': 'CSRF va session orqali kirish/chiqish.'},
+        {'name': 'Auth', 'description': 'JWT orqali kirish/chiqish.'},
         {'name': 'Profil', 'description': 'Joriy foydalanuvchi va parol.'},
         {'name': 'Accounts', 'description': 'Account boshqaruvi.'},
         {'name': 'Academics', 'description': 'Kurslarni ko‘rish.'},

@@ -1,16 +1,10 @@
-from django.contrib.auth import (
-    authenticate,
-    login,
-    logout,
-    update_session_auth_hash,
-)
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.middleware.csrf import get_token
 from django.utils.crypto import get_random_string
 from django.utils.decorators import method_decorator
-from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
+from django.views.decorators.csrf import ensure_csrf_cookie
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import (
     OpenApiExample,
@@ -19,11 +13,13 @@ from drf_spectacular.utils import (
     extend_schema_view,
 )
 from rest_framework import status
-from rest_framework.authentication import SessionAuthentication
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.generics import GenericAPIView, RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import AccountLifecycleAudit, User
 from accounts.permissions import CanManageAccounts, MustChangePasswordPermission
@@ -37,8 +33,11 @@ from accounts.serializers import (
     LoginErrorSerializer,
     LoginInputSerializer,
     LoginResponseSerializer,
+    LogoutInputSerializer,
+    TokenPairResponseSerializer,
+    UsernameCaseInsensitiveTokenObtainPairSerializer,
 )
-from root.openapi import CSRF_HEADER, common_error_responses, error_response
+from root.openapi import common_error_responses, error_response
 
 
 def generate_temporary_password(user):
@@ -61,8 +60,8 @@ class CsrfCookieView(GenericAPIView):
     @extend_schema(
         summary='CSRF token olish',
         description=(
-            'Session orqali himoyalangan POST/PATCH so‘rovlaridan oldin '
-            'cookie va unga mos CSRF tokenni beradi.'
+            'Legacy CSRF token yordamchisi. JWT API endpointlarida token olish '
+            'yoki yuborish talab qilinmaydi.'
         ),
         tags=['Auth'],
         request=None,
@@ -79,27 +78,27 @@ class CsrfCookieView(GenericAPIView):
         return Response({"csrfToken": get_token(request)})
 
 
-@method_decorator(csrf_protect, name="dispatch")
 class LoginView(GenericAPIView):
     serializer_class = LoginInputSerializer
     permission_classes = (AllowAny,)
     authentication_classes = ()
 
+    def get_authenticate_header(self, request):
+        return JWTAuthentication().authenticate_header(request)
+
     @extend_schema(
         summary='Tizimga kirish',
         description=(
-            'Username va parol bilan session yaratadi. Avval CSRF tokenni '
-            'oling, so‘ng CSRF header bilan yuboring.'
+            'Username va parol bilan JWT access va refresh token beradi.'
         ),
         tags=['Auth'],
-        parameters=[CSRF_HEADER],
         request=LoginInputSerializer,
         responses={
-            status.HTTP_200_OK: LoginResponseSerializer,
+            status.HTTP_200_OK: TokenPairResponseSerializer,
             status.HTTP_400_BAD_REQUEST: LoginErrorSerializer,
-            status.HTTP_403_FORBIDDEN: error_response(
-                'CSRF cookie/header yo‘q yoki mos emas.',
-                {'detail': 'CSRF token missing or incorrect.'},
+            status.HTTP_401_UNAUTHORIZED: error_response(
+                'Username yoki parol noto‘g‘ri.',
+                {'detail': 'No active account found with the given credentials'},
             ),
         },
         examples=[
@@ -109,36 +108,25 @@ class LoginView(GenericAPIView):
                 request_only=True,
             ),
             OpenApiExample(
-                'Login javobi',
-                value={'detail': 'Muvaffaqiyatli tizimga kirildi.'},
+                'JWT login javobi',
+                value={'access': 'access-token', 'refresh': 'refresh-token'},
                 response_only=True,
             ),
         ],
     )
     def post(self, request):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        django_request = request._request
-        user = authenticate(
-            request=django_request,
-            username=serializer.validated_data["username"],
-            password=serializer.validated_data["password"],
+        serializer = UsernameCaseInsensitiveTokenObtainPairSerializer(
+            data=request.data,
+            context=self.get_serializer_context(),
         )
-        if user is None:
-            return Response(
-                {"detail": "Login yoki parol noto‘g‘ri."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        login(django_request, user)
-        return Response({"detail": "Muvaffaqiyatli tizimga kirildi."})
+        serializer.is_valid(raise_exception=True)
+        return Response(serializer.validated_data)
 
 
 @extend_schema_view(
     get=extend_schema(
         summary='Joriy profilni ko‘rish',
-        description='Session orqali kirgan foydalanuvchining profilini qaytaradi.',
+        description=        'Bearer JWT orqali kirgan foydalanuvchining profilini qaytaradi.',
         tags=['Profil'],
         responses={
             status.HTTP_200_OK: CurrentUserSerializer,
@@ -149,7 +137,6 @@ class LoginView(GenericAPIView):
         summary='Joriy profilni yangilash',
         description='Faqat ism, familiya va afzal tilni o‘zgartiradi.',
         tags=['Profil'],
-        parameters=[CSRF_HEADER],
         request=CurrentUserSerializer,
         responses={
             status.HTTP_200_OK: CurrentUserSerializer,
@@ -167,7 +154,7 @@ class LoginView(GenericAPIView):
 class CurrentUserView(RetrieveUpdateAPIView):
     serializer_class = CurrentUserSerializer
     permission_classes = (IsAuthenticated,)
-    authentication_classes = (SessionAuthentication,)
+    authentication_classes = (JWTAuthentication,)
     http_method_names = ("get", "patch", "head", "options")
 
     def get_object(self):
@@ -177,16 +164,15 @@ class CurrentUserView(RetrieveUpdateAPIView):
 class ChangePasswordView(GenericAPIView):
     serializer_class = ChangePasswordSerializer
     permission_classes = (IsAuthenticated,)
-    authentication_classes = (SessionAuthentication,)
+    authentication_classes = (JWTAuthentication,)
 
     @extend_schema(
         summary='Parolni almashtirish',
         description=(
             'Joriy parolni tekshiradi, yangi parolni validatsiya qiladi va '
-            'joriy sessionni saqlab qoladi.'
+            'JWT-authenticated joriy foydalanuvchi parolini yangilaydi.'
         ),
         tags=['Profil'],
-        parameters=[CSRF_HEADER],
         request=ChangePasswordSerializer,
         responses={
             status.HTTP_200_OK: LoginResponseSerializer,
@@ -211,51 +197,75 @@ class ChangePasswordView(GenericAPIView):
         user.set_password(serializer.validated_data["new_password"])
         user.must_change_password = False
         user.save(update_fields=("password", "must_change_password"))
-        update_session_auth_hash(request._request, user)
         return Response({"detail": "Parol muvaffaqiyatli o‘zgartirildi."})
 
 
-class LogoutView(APIView):
+class LogoutView(GenericAPIView):
+    serializer_class = LogoutInputSerializer
     permission_classes = (IsAuthenticated,)
-    authentication_classes = (SessionAuthentication,)
+    authentication_classes = (JWTAuthentication,)
 
     @extend_schema(
         summary='Tizimdan chiqish',
-        description='Joriy sessionni tugatadi.',
+        description=(
+            'Autentifikatsiyadan o‘tgan foydalanuvchining refresh tokenini '
+            'blacklist qilib, keyingi refresh so‘rovlarini bekor qiladi.'
+        ),
         tags=['Auth'],
-        parameters=[CSRF_HEADER],
-        request=None,
+        request=LogoutInputSerializer,
         responses={
-            status.HTTP_200_OK: LoginResponseSerializer,
-            **common_error_responses(),
+            status.HTTP_204_NO_CONTENT: None,
+            status.HTTP_400_BAD_REQUEST: error_response(
+                'Refresh token yuborilmagan yoki body noto‘g‘ri.',
+                {'refresh': ['This field is required.']},
+            ),
+            status.HTTP_401_UNAUTHORIZED: error_response(
+                'JWT access yoki refresh token noto‘g‘ri.',
+                {'detail': 'Token is invalid or expired'},
+            ),
+            status.HTTP_403_FORBIDDEN: error_response(
+                'Refresh token joriy foydalanuvchiga tegishli emas.',
+                {'detail': 'Refresh token does not belong to this user.'},
+            ),
         },
     )
     def post(self, request):
-        logout(request._request)
-        return Response({"detail": "Tizimdan chiqildi."})
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            refresh = RefreshToken(serializer.validated_data["refresh"])
+        except TokenError as exc:
+            raise AuthenticationFailed("Refresh token yaroqsiz.") from exc
+
+        if str(refresh.get("user_id")) != str(request.user.pk):
+            raise PermissionDenied(
+                "Refresh token joriy foydalanuvchiga tegishli emas."
+            )
+
+        refresh.blacklist()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class AccountCreateView(GenericAPIView):
     serializer_class = AccountCreateSerializer
-    permission_classes = (
-        IsAuthenticated,
-        MustChangePasswordPermission,
-        CanManageAccounts,
-    )
-    authentication_classes = (SessionAuthentication,)
+    permission_classes = (AllowAny,)
+    authentication_classes = ()
 
     @extend_schema(
         summary='Account yaratish',
         description=(
-            'manage_accounts huquqli operator pupil yoki teacher account '
-            'yaratadi va bir martalik vaqtinchalik parol qaytaradi.'
+            'Login talab qilmaydi. Faqat pupil yoki teacher roli bilan account '
+            'yaratadi. Parol Django password hasher orqali saqlanadi; '
+            'autentifikatsiya va CSRF token kerak emas.'
         ),
         tags=['Accounts'],
-        parameters=[CSRF_HEADER],
         request=AccountCreateSerializer,
         responses={
-            status.HTTP_201_CREATED: AccountCreatedResponseSerializer,
-            **common_error_responses(),
+            status.HTTP_201_CREATED: CurrentUserSerializer,
+            status.HTTP_400_BAD_REQUEST: error_response(
+                'Username takrorlangan yoki request maydonlari noto‘g‘ri.',
+                {'username': ['A user with that username already exists.']},
+            ),
         },
         examples=[
             OpenApiExample(
@@ -265,6 +275,7 @@ class AccountCreateView(GenericAPIView):
                     'first_name': 'Aziza',
                     'last_name': 'Karimova',
                     'role': 'pupil',
+                    'password': 'Kuchli-parol-2026!',
                     'preferred_language': 'uz',
                 },
                 request_only=True,
@@ -274,26 +285,14 @@ class AccountCreateView(GenericAPIView):
     def post(self, request):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        pending_user = User(
-            username=serializer.validated_data["username"],
-            role=serializer.validated_data["role"],
-            first_name=serializer.validated_data.get("first_name", ""),
-            last_name=serializer.validated_data.get("last_name", ""),
-            preferred_language=serializer.validated_data.get(
-                "preferred_language",
-                "",
-            ),
-        )
-        temporary_password = generate_temporary_password(pending_user)
         with transaction.atomic():
-            user = serializer.save(password=temporary_password)
+            user = serializer.save()
             AccountLifecycleAudit.objects.create(
-                actor=request.user,
+                actor=request.user if request.user.is_authenticated else None,
                 target=user,
                 action=AccountLifecycleAudit.Action.CREATED,
             )
-        user.temporary_password = temporary_password
-        response = AccountCreatedResponseSerializer(user).data
+        response = CurrentUserSerializer(user).data
         return Response(
             response,
             status=status.HTTP_201_CREATED,
@@ -307,7 +306,7 @@ class AccountResetPasswordView(GenericAPIView):
         MustChangePasswordPermission,
         CanManageAccounts,
     )
-    authentication_classes = (SessionAuthentication,)
+    authentication_classes = (JWTAuthentication,)
 
     @extend_schema(
         summary='Account parolini qayta o‘rnatish',
@@ -321,7 +320,6 @@ class AccountResetPasswordView(GenericAPIView):
                 required=True,
                 description='Paroli qayta o‘rnatiladigan account IDsi.',
             ),
-            CSRF_HEADER,
         ],
         request=AccountResetPasswordSerializer,
         responses={

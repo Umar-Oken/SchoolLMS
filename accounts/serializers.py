@@ -1,17 +1,26 @@
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
+from rest_framework.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 from accounts.models import User
 
 
+@extend_schema_field(OpenApiTypes.PASSWORD)
+class PasswordField(serializers.CharField):
+    pass
+
+
 class ChangePasswordSerializer(serializers.Serializer):
-    current_password = serializers.CharField(
+    current_password = PasswordField(
         write_only=True,
         trim_whitespace=False,
         style={"input_type": "password"},
     )
-    new_password = serializers.CharField(
+    new_password = PasswordField(
         write_only=True,
         trim_whitespace=False,
         style={"input_type": "password"},
@@ -37,12 +46,27 @@ class ChangePasswordSerializer(serializers.Serializer):
 
 class LoginInputSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150, trim_whitespace=False)
-    password = serializers.CharField(
+    password = PasswordField(
         max_length=128,
         trim_whitespace=False,
         write_only=True,
         style={"input_type": "password"},
     )
+
+
+class UsernameCaseInsensitiveTokenObtainPairSerializer(TokenObtainPairSerializer):
+    def validate(self, attrs):
+        username = attrs[self.username_field]
+        matches = list(
+            User.objects.filter(
+                **{f"{self.username_field}__iexact": username}
+            ).values_list(self.username_field, flat=True)[:2]
+        )
+        if len(matches) > 1:
+            raise AuthenticationFailed(self.error_messages["no_active_account"])
+        if len(matches) == 1:
+            attrs[self.username_field] = matches[0]
+        return super().validate(attrs)
 
 
 class CsrfTokenSerializer(serializers.Serializer):
@@ -53,8 +77,20 @@ class LoginResponseSerializer(serializers.Serializer):
     detail = serializers.CharField(read_only=True)
 
 
+class TokenPairResponseSerializer(serializers.Serializer):
+    access = serializers.CharField(read_only=True)
+    refresh = serializers.CharField(read_only=True)
+
+
 class LoginErrorSerializer(serializers.Serializer):
     detail = serializers.CharField(read_only=True)
+
+
+class LogoutInputSerializer(serializers.Serializer):
+    refresh = serializers.CharField(
+        write_only=True,
+        trim_whitespace=False,
+    )
 
 
 class CurrentUserSerializer(serializers.ModelSerializer):
@@ -87,6 +123,13 @@ class CurrentUserSerializer(serializers.ModelSerializer):
 
 
 class AccountCreateSerializer(serializers.ModelSerializer):
+    password = PasswordField(
+        max_length=128,
+        trim_whitespace=False,
+        write_only=True,
+        style={"input_type": "password"},
+    )
+
     class Meta:
         model = User
         fields = (
@@ -94,13 +137,14 @@ class AccountCreateSerializer(serializers.ModelSerializer):
             "first_name",
             "last_name",
             "role",
+            "password",
             "preferred_language",
         )
         extra_kwargs = {
             "username": {"required": True},
             "role": {"required": True},
-            "first_name": {"required": False, "allow_blank": True},
-            "last_name": {"required": False, "allow_blank": True},
+            "first_name": {"required": True, "allow_blank": False},
+            "last_name": {"required": True, "allow_blank": False},
             "preferred_language": {"required": False, "allow_blank": True},
         }
 
@@ -119,11 +163,27 @@ class AccountCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Role faqat 'pupil' yoki 'teacher' bo‘lishi kerak.")
         return value
 
+    def validate(self, attrs):
+        user = User(
+            username=attrs["username"],
+            first_name=attrs["first_name"],
+            last_name=attrs["last_name"],
+            role=attrs["role"],
+        )
+        try:
+            validate_password(attrs["password"], user=user)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                {"password": exc.messages}
+            ) from exc
+        return attrs
+
     def create(self, validated_data):
         password = validated_data.pop("password")
         return User.objects.create_user(
             password=password,
-            must_change_password=True,
+            is_active=True,
+            must_change_password=False,
             **validated_data,
         )
 
