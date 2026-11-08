@@ -6,7 +6,8 @@ from rest_framework.exceptions import NotFound, ValidationError
 from accounts.models import User
 from academics.services import ensure_term_open
 from academics.views import teacher_course_scope
-from learning.models import Topic
+from files.models import Attachment
+from learning.models import Resource, Topic
 
 
 @transaction.atomic
@@ -60,3 +61,57 @@ def publish_topic(topic_id, *, actor):
         raise ValidationError(exc.message_dict) from exc
     topic.save(update_fields=['state', 'published_at'])
     return topic
+
+
+@transaction.atomic
+def publish_resource(resource_id, *, actor):
+    if not isinstance(actor, User) or actor.role != User.Role.TEACHER:
+        raise NotFound()
+
+    resource = (
+        Resource.objects.select_for_update(of=('self',))
+        .select_related('topic', 'topic__course', 'attachment')
+        .filter(
+            pk=resource_id,
+            topic__course_id__in=teacher_course_scope(
+                actor,
+                active_only=True,
+            ).values('pk'),
+            topic__archived_at__isnull=True,
+        )
+        .first()
+    )
+    if resource is None:
+        raise NotFound()
+    if resource.topic.state != Topic.State.PUBLISHED:
+        raise ValidationError({
+            'topic': 'Resursni nashr qilishdan oldin mavzuni nashr qiling.'
+        })
+    if resource.kind == Resource.Kind.PDF:
+        attachment = (
+            Attachment.objects.select_for_update()
+            .filter(pk=resource.attachment_id)
+            .first()
+        )
+        if (
+            attachment is None
+            or attachment.owner_id != actor.pk
+            or attachment.scan_status != Attachment.ScanStatus.CLEAN
+            or attachment.detected_mime != 'application/pdf'
+        ):
+            raise ValidationError({
+                'attachment': 'Resurs uchun egasiga tegishli, clean PDF fayl kerak.'
+            })
+    elif resource.kind in (Resource.Kind.VIDEO, Resource.Kind.LINK):
+        if not resource.url:
+            raise ValidationError({'url': 'Published video/link resurs URL talab qiladi.'})
+    else:
+        raise ValidationError({'kind': 'Resurs turi noto‘g‘ri.'})
+    if resource.state == Resource.State.PUBLISHED:
+        return resource
+    if resource.state != Resource.State.DRAFT:
+        raise ValidationError({'state': 'Faqat draft resurs nashr qilinadi.'})
+
+    resource.state = Resource.State.PUBLISHED
+    resource.save(update_fields=['state'])
+    return resource

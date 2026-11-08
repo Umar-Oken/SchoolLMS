@@ -12,6 +12,7 @@ jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
 Pillow==12.3.0
 psycopg2-binary==2.9.13
+python-magic==0.4.27
 python-dotenv==1.2.4
 PyYAML==6.0.3
 referencing==0.37.0

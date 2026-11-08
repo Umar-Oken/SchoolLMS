@@ -293,6 +293,20 @@ Topic `course`, `state`, `published_at` client tomonidan create/update’da
 boshqarilmaydi. PUT/DELETE route mavjud emas. Yopiq termdagi write `400`
 qaytaradi; arxiv/publish mavjud qatorni o‘chirmaydi.
 
+`PUT /api/v1/topics/<id>/completion/` joriy pupil uchun published mavzuni
+o‘qilgan deb belgilaydi; so‘rov tanasi `{}`. `200` javobda
+`{"topic":42,"kind":"read","completed_at":"<UTC-time>"}` qaytadi. Faqat faol
+enrollment’li pupil belgi qo‘ya oladi. Teacher uchun `403`, boshqa kursga
+yozilgan pupil, yopiq enrollment yoki draft mavzu uchun `404`; ortiqcha body
+maydoni `400`. `GET /api/v1/topics/<id>/` pupilga o‘zining `completion`
+qiymatini (`{"kind":"read","completed_at":"<UTC-time>"}` yoki `null`) qaytaradi;
+teacher response’da bu maydon `null`.
+
+Completion foizi mavzuni o‘qilgan deb belgilanganini anglatadi; bu bilim
+bahosi yoki outcome mastery o‘lchovi emas. Har bir pupil/topic/read turi uchun
+bitta DB yozuvi bo‘ladi. PUT’ni takror yuborish shu yozuvni qaytaradi va vaqt
+belgisini o‘zgartirmaydi.
+
 `POST /api/v1/topics/` request body:
 
 ```json
@@ -319,6 +333,13 @@ curl -X PATCH http://127.0.0.1:8000/api/v1/topics/42/ \
 curl -X POST http://127.0.0.1:8000/api/v1/topics/42/publish/ \
   -H "Authorization: ******"
 
+# Pupil: published mavzuni o‘qilgan deb belgilash va o‘z belgisini ko‘rish
+curl -X PUT http://127.0.0.1:8000/api/v1/topics/42/completion/ \
+  -H "Authorization: ******" -H "Content-Type: application/json" \
+  -d '{}'
+curl http://127.0.0.1:8000/api/v1/topics/42/ \
+  -H "Authorization: ******"
+
 # Teacher roster o‘qiydi; pupil faqat publish qilingandan keyin topicni ko‘radi
 curl http://127.0.0.1:8000/api/v1/courses/12/pupils/ \
   -H "Authorization: ******"
@@ -326,10 +347,92 @@ curl http://127.0.0.1:8000/api/v1/courses/12/topics/ \
   -H "Authorization: ******"
 ```
 
+### Mavzu resurslari
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `GET /api/v1/topics/<topic_id>/resources/` | ******; teacher o‘z biriktirilgan mavzusidagi resurslarni, pupil o‘z published mavzusidagi published resurslarni ko‘radi | `200` — resurslar ro‘yxati | Boshqa course/mavzu yoki pupil uchun draft `404` |
+| `POST /api/v1/topics/<topic_id>/resources/` | Faol assignment’li teacher; `kind`, `title`, `description`, `transcript_text`; PDF’da o‘z `clean` `attachment`, video/link’da ruxsatli `url` | `201` — `state=draft`, `version=1` resurs | Noto‘g‘ri attachment/URL yoki aralash input `400`; boshqa teacher/pupil mavzusi `404`/`403` |
+| `GET /api/v1/resources/<id>/` | ******; teacher o‘z course scope’ida, pupil faqat o‘z published topic’idagi published resursni ko‘radi | `200` — resurs metadata | Draft, boshqa topic yoki topilmasa `404` |
+| `POST /api/v1/resources/<id>/publish/` | Faol biriktirilgan teacher; body kerak emas | `200` — `state=published` | Mavzu draft yoki PDF attachment `clean` bo‘lmasa `400`; boshqa scope `404` |
+
+PDF turi uchun faqat o‘ziga tegishli `clean` PDF `Attachment` biriktiriladi;
+video va link turida faqat HTTPS `url` beriladi, attachment berilmaydi.
+`RESOURCE_URL_ALLOWED_HOSTS` muhit sozlamasi hostname ruxsat ro‘yxati bo‘lib,
+boshlang‘ich qiymatlari `youtube.com`, `youtu.be`, `vimeo.com`. Subdomenlarga
+ruxsat beriladi; HTTP, ro‘yxatda bo‘lmagan host, credential bor URL va 443 dan
+boshqa port rad etiladi. Server URL’ni so‘rov bilan ochmaydi. `state`, `version`
+va topic ID server tomonidan boshqariladi. Resursni nashr qilishdan oldin topic
+nashr qilingan bo‘lishi kerak. Javobda URL va accessibility uchun
+`transcript_text` qaytadi; fayl bytes’i yoki public URL yaratilmaydi.
+`description` qisqa izoh uchun, `transcript_text` esa video/link transkripti
+yoki shunga teng accessibility matni uchun.
+
+```bash
+# Teacher: clean PDF biriktirish
+curl -X POST http://127.0.0.1:8000/api/v1/topics/42/resources/ \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"pdf","title":"Kasrlar materiali","description":"Dars PDF’i","attachment":17}'
+
+# Teacher: ruxsatli provider URL’ini draft video resurs sifatida qo‘shish
+curl -X POST http://127.0.0.1:8000/api/v1/topics/42/resources/ \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"video","title":"Kasrlar videosi","url":"https://youtu.be/example123","transcript_text":"Videodagi matn"}'
+
+# Mavzu publish qilingandan keyin resource publish qilinadi
+curl -X POST http://127.0.0.1:8000/api/v1/resources/8/publish/ \
+  -H "Authorization: ******"
+
+# Pupil faqat published resurslarni ko‘radi
+curl http://127.0.0.1:8000/api/v1/topics/42/resources/ \
+  -H "Authorization: ******"
+```
+
 Bu repository’da task yoki grade yozish endpointlari hozircha mavjud emas.
 Ular qo‘shilganda yopiq term siyosatini chetlab o‘tmaslik uchun
 `academics.services.ensure_term_open()` shared guard’ini tegishli service
 ichida chaqirish talab qilinadi.
+
+### Private fayl yuklash
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `POST /api/v1/attachments/` | ******; `multipart/form-data` ichida bitta `file` maydoni; PDF/JPEG/PNG, 10 MiB gacha | `201` — `id`, UUID `key`, `original_name`, `size`, `detected_mime`, `scan_status=pending_scan` | MIME/kengaytma noto‘g‘ri yoki `owner`/`key`/`scan_status` kabi ortiqcha maydon `400`; 10 MiB dan katta fayl `413`; token yo‘q `401` |
+| `GET /api/v1/attachments/<id>/download/` | ******; egasi yoki o‘z role/course scope’idagi published topic ichidagi published PDF resursga ruxsati bor foydalanuvchi; attachment `clean` bo‘lishi shart | `200` — `Content-Disposition: attachment` bilan fayl oqimi | Yashirin/begona yoki mavjud bo‘lmagan fayl, pending/rejected scan `404`; token yo‘q `401` |
+
+Server MIME turini bytes’dan `python-magic`/`libmagic` orqali aniqlab, fayl
+kengaytmasi bilan solishtiradi; client yuborgan `Content-Type`ga ishonmaydi.
+Bytes private storage’da UUID key bilan saqlanadi, metadata javobida public URL
+bo‘lmaydi. Muvaffaqiyatli upload `pending_scan` holatida qoladi.
+`GET /api/v1/attachments/<id>/download/` clean faylni egasiga yoki ruxsatli,
+published resurs ota-onasi orqali foydalanuvchiga beradi; pending/rejected fayl
+hatto egasiga ham berilmaydi. Lokal adapter storage API’dan bytes’ni ochib,
+`FileResponse` orqali uzatadi, public media URL yaratmaydi. Keyinchalik S3
+adapteri shu storage interfeysida ishlashi mumkin; uzoq fayllar uchun parent
+ruxsati tekshirilgandan keyingina qisqa muddatli signed URL’ga o‘tish staging
+bosqichida ko‘riladi. Hozir signed URL yoki submission parent yo‘q. Runtime
+muhitda `python-magic`dan tashqari tizimning `libmagic` kutubxonasi ham kerak.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/attachments/ \
+  -H "Authorization: Bearer <access-token>" \
+  -F "file=@lesson.pdf;type=application/pdf"
+```
+
+Javob:
+
+```json
+{
+  "id": 1,
+  "key": "4d20c3fd-cd9a-4af6-8847-252f2d198ce6",
+  "original_name": "lesson.pdf",
+  "size": 32768,
+  "detected_mime": "application/pdf",
+  "scan_status": "pending_scan"
+}
+```
 
 ## Swagger’da sinash
 

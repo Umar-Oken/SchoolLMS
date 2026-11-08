@@ -74,6 +74,7 @@ INSTALLED_APPS = [
     'accounts.apps.AccountsConfig',
     'academics.apps.AcademicsConfig',
     'learning.apps.LearningConfig',
+    'files.apps.FilesConfig',
     'apps.apps.AppsConfig',
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
@@ -145,6 +146,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Accounts', 'description': 'Account boshqaruvi.'},
         {'name': 'Academics', 'description': 'Kurslarni ko‘rish.'},
         {'name': 'Learning', 'description': 'Topic yaratish, o‘qish va boshqarish.'},
+        {'name': 'Files', 'description': 'Private fayllarni yuklash.'},
     ],
     'REDOC_DIST': 'SIDECAR',
     'SWAGGER_UI_SETTINGS': {
@@ -216,6 +218,28 @@ STATIC_URL = '/static/'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+PRIVATE_STORAGE_ROOT = BASE_DIR / 'private_files'
+RESOURCE_URL_ALLOWED_HOSTS = tuple(
+    host.strip().lower()
+    for host in os.environ.get(
+        'RESOURCE_URL_ALLOWED_HOSTS',
+        'youtube.com,youtu.be,vimeo.com',
+    ).split(',')
+    if host.strip()
+)
+
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+    },
+    'private': {
+        'BACKEND': 'files.storage.PrivateLocalStorage',
+        'OPTIONS': {'location': PRIVATE_STORAGE_ROOT},
+    },
+}
 
 
 # Email

@@ -1,6 +1,12 @@
 from django.urls import path
 
-from learning.views import TopicViewSet
+from learning.views import (
+    ResourceDetailView,
+    ResourceListCreateView,
+    ResourcePublishView,
+    TopicCompletionView,
+    TopicViewSet,
+)
 
 urlpatterns = [
     path(
@@ -19,6 +25,11 @@ urlpatterns = [
         name='topic-detail',
     ),
     path(
+        'topics/<int:pk>/completion/',
+        TopicCompletionView.as_view(),
+        name='topic-completion',
+    ),
+    path(
         'topics/<int:pk>/archive/',
         TopicViewSet.as_view({'post': 'archive'}),
         name='topic-archive',
@@ -27,5 +38,20 @@ urlpatterns = [
         'topics/<int:pk>/publish/',
         TopicViewSet.as_view({'post': 'publish'}),
         name='topic-publish',
+    ),
+    path(
+        'topics/<int:topic_pk>/resources/',
+        ResourceListCreateView.as_view(),
+        name='topic-resource-list-create',
+    ),
+    path(
+        'resources/<int:pk>/',
+        ResourceDetailView.as_view(),
+        name='resource-detail',
+    ),
+    path(
+        'resources/<int:pk>/publish/',
+        ResourcePublishView.as_view(),
+        name='resource-publish',
     ),
 ]
