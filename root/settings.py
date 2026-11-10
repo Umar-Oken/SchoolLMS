@@ -93,6 +93,9 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+SESSION_COOKIE_SECURE = not DEBUG
+CSRF_COOKIE_SECURE = not DEBUG
+
 ROOT_URLCONF = 'root.urls'
 
 TEMPLATES = [

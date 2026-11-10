@@ -2,12 +2,11 @@ from pathlib import Path
 
 import magic
 from rest_framework import serializers
-from rest_framework.exceptions import APIException
 
 from files.models import Attachment
+from files.upload_handlers import AttachmentTooLarge, MAX_ATTACHMENT_SIZE
 
 
-MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
 ALLOWED_MIME_TYPES = {
     'application/pdf',
     'image/jpeg',
@@ -18,12 +17,6 @@ ALLOWED_EXTENSIONS = {
     'image/jpeg': {'.jpg', '.jpeg'},
     'image/png': {'.png'},
 }
-
-
-class AttachmentTooLarge(APIException):
-    status_code = 413
-    default_detail = 'Fayl hajmi 10 MB limitdan oshmasligi kerak.'
-    default_code = 'file_too_large'
 
 
 class AttachmentUploadSerializer(serializers.Serializer):

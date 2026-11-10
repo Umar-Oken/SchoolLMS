@@ -200,8 +200,8 @@
   tuzilmani, ehtiyoj tug‘ilganda ilovalar qo‘shishni va API contract’ini OpenAPI orqali
   hujjatlashtirishni ko‘zlaydi.
 - **Autentifikatsiya:** API JWT Bearer access/refresh tokenlaridan foydalanadi;
-  Django admin/session hamda CSRF himoyasi saqlanadi. Ommaviy ro‘yxatdan o‘tish
-  va wildcard CORS scope’ga kirmaydi.
+  Django admin/session hamda CSRF himoyasi saqlanadi. Wildcard CORS
+  scope’ga kirmaydi. Ochiq account registration policy exception sifatida qayd etilgan.
 - **Maqsadli modul guruhlari:** accounts/auth, academics/catalog, learning/topics,
   files/resources, assignments/submissions, assessments/grades, scheduling/attendance,
   communications/background jobs, dashboards/API sifati va ixtiyoriy AI qoralama.
@@ -210,8 +210,12 @@
   bu ish scope’iga kirmaydi. Frontend keyinchalik tasdiqlangan API/auth/file contractiga
   tayangan holda alohida amalga oshiriladi.
 - **Scope’dan tashqarida:** parent roli, multi-tenant SaaS, davlat integratsiyasi,
-  GraphQL, microservices, Kubernetes, public registration, avtomatik jadval solveri,
+  GraphQL, microservices, Kubernetes, avtomatik jadval solveri,
   video transcode va P000’da keyinga qoldirilgan boshqa kengaytmalar.
+- **Policy exception:** amaldagi API’da pupil/teacher uchun ochiq self-registration
+  (`POST /api/v1/accounts/`) mavjud. U original scope’da ko‘zda tutilmagan;
+  production’da yoqishdan oldin owner tasdig‘i, abuse rate limit va monitoring
+  talablarini belgilang.
 
 ## Ishlash va data qoidalarining tayanchlari
 

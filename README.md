@@ -120,43 +120,42 @@ mumkin. Pupil, faol bo‘lmagan teacher yoki faol bo‘lmagan/superuser bo‘lma
 actor bilan command rad etiladi. Profil PATCH capability maydonlarini qabul
 qilmaydi.
 
-## Operator account API
+## Account registration va parolni tiklash
 
-`POST /api/v1/accounts/` mavjud bo‘lmagan pupil yoki teacher loginini yaratadi.
-Request maydonlari: `username`, `role` (`pupil` yoki `teacher`), va ixtiyoriy
-`first_name`, `last_name`, `preferred_language`. `is_staff`, `is_superuser`,
-capability, enrollment yoki parol maydonlari qabul qilinmaydi. Javob `201`
-bo‘lib, server yaratgan `temporary_password`ni faqat shu javobda beradi;
-parol hash shaklida saqlanadi va `must_change_password=True` bo‘ladi.
+`POST /api/v1/accounts/` ochiq registration endpointidir: JWT yoki CSRF talab
+qilinmaydi. `username`, `first_name`, `last_name`, `role` (`pupil` yoki
+`teacher`) va foydalanuvchi tanlagan `password` majburiy; `preferred_language`
+ixtiyoriy. Parol Django validatorlaridan o‘tib hash shaklida saqlanadi.
+`is_staff`, `is_superuser`, capability va enrollment kabi privilege maydonlari
+rad etiladi. Javob parolni qaytarmaydi. Ro‘yxatdan o‘tish ochiq bo‘lgani uchun
+production’da signup siyosati, abuse monitoringi va rate limitni deployment
+qatlamida belgilang.
 
-`POST /api/v1/accounts/{id}/reset-password/` bo‘sh JSON body bilan ishlaydi.
-`200` javobda yangi vaqtinchalik parol bir marta qaytariladi. Eski parol endi
-ishlamaydi, foydalanuvchining avvalgi sessiyalari keyingi so‘rovda Django auth
-hash tekshiruvi bilan bekor bo‘ladi, `must_change_password=True` yoqiladi.
-Ikkala amal `AccountLifecycleAudit`da actor, target, amal va vaqtni qayd etadi;
-parol yoki request body auditga/logga yozilmaydi. Javob `Cache-Control:
-no-store` header’iga ega.
+`POST /api/v1/accounts/{id}/reset-password/` autentifikatsiya va
+`manage_accounts` huquqini talab qiladi; bo‘sh JSON body bilan ishlaydi.
+`200` javobda yangi vaqtinchalik parol bir marta qaytariladi va
+`Cache-Control: no-store` qo‘yiladi. Parol yangilangach eski credential va
+tokenlar keyingi tekshiruvda bekor qilinadi, `must_change_password=True`
+yoqiladi. Ikkala amal `AccountLifecycleAudit`da actor, target, amal va vaqtni
+qayd etadi; parol auditga/logga yozilmaydi.
 
-Ikkala endpoint session authentication, CSRF va `manage_accounts` permission
-talab qiladi. Oddiy teacher/pupil uchun `403`; noto‘g‘ri yoki qo‘shimcha body
-maydonlari uchun `400`; topilmagan reset target’i uchun `404`. Login’dan keyin
-`/api/v1/auth/csrf/`dan yangi token oling va uni `X-CSRFToken` header’ida
-cookie jar bilan yuboring:
+Registration so‘roviga autentifikatsiya kerak emas. Parolni tiklash uchun
+`manage_accounts` capability’li foydalanuvchining JWT access tokenidan
+foydalaning:
 
 ```sh
-curl -sS -b /tmp/schoollms-cookies.txt -c /tmp/schoollms-cookies.txt \
-  -H 'Content-Type: application/json' -H 'X-CSRFToken: <csrfToken>' \
-  --data '{"username":"new.pupil","role":"pupil","first_name":"Aziza"}' \
+curl -sS -H 'Content-Type: application/json' \
+  --data '{"username":"new.pupil","first_name":"Aziza","last_name":"Karimova","role":"pupil","password":"<strong-password>"}' \
   http://127.0.0.1:8000/api/v1/accounts/
-curl -sS -b /tmp/schoollms-cookies.txt -c /tmp/schoollms-cookies.txt \
-  -H 'Content-Type: application/json' -H 'X-CSRFToken: <csrfToken>' \
+curl -sS -H 'Authorization: Bearer <access-token>' \
+  -H 'Content-Type: application/json' \
   --data '{}' \
   http://127.0.0.1:8000/api/v1/accounts/123/reset-password/
 ```
 
-Vaqtinchalik parolni xavfsiz kanalda foydalanuvchiga yetkazing; response’ni
-saqlamang, loglamang yoki qayta ko‘rsatuvchi tizimga yubormang. Account
-yaratish enrollment yaratmaydi; u alohida jarayon.
+Haqiqiy parolni shell history’ga yozmang. Reset javobidagi vaqtinchalik
+parolni xavfsiz kanalda yetkazing; response’ni saqlamang yoki loglamang.
+Account yaratish enrollment yaratmaydi; u alohida jarayon.
 
 ## Kurslarni o‘qish API’si
 

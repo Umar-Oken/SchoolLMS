@@ -1,6 +1,7 @@
 import uuid
 from io import BytesIO
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from django.conf import settings
@@ -212,19 +213,24 @@ def test_upload_over_limit_returns_413(attachment_api_user):
     client = APIClient()
     client.force_authenticate(attachment_api_user)
 
-    response = client.post(
-        '/api/v1/attachments/',
-        {
-            'file': SimpleUploadedFile(
-                'large.pdf',
-                b'x' * (MAX_ATTACHMENT_SIZE + 1),
-                content_type='application/pdf',
-            )
-        },
-        format='multipart',
-    )
+    with patch(
+        'files.serializers.AttachmentUploadSerializer.validate',
+        side_effect=AssertionError('Oversized upload reached serializer.'),
+    ) as serializer_validate:
+        response = client.post(
+            '/api/v1/attachments/',
+            {
+                'file': SimpleUploadedFile(
+                    'large.pdf',
+                    b'x' * (MAX_ATTACHMENT_SIZE + 1),
+                    content_type='application/pdf',
+                )
+            },
+            format='multipart',
+        )
 
     assert response.status_code == 413
+    serializer_validate.assert_not_called()
     assert response.data['detail'] == (
         'Fayl hajmi 10 MB limitdan oshmasligi kerak.'
     )

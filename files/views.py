@@ -18,6 +18,7 @@ from files.serializers import (
     AttachmentUploadSerializer,
 )
 from files.selectors import attachment_download_scope
+from files.upload_handlers import AttachmentSizeLimitUploadHandler
 from accounts.permissions import MustChangePasswordPermission
 from root.openapi import common_error_responses, error_response
 
@@ -44,6 +45,13 @@ from root.openapi import common_error_responses, error_response
 class AttachmentUploadView(GenericAPIView):
     serializer_class = AttachmentUploadSerializer
     parser_classes = (MultiPartParser, FormParser)
+
+    def initialize_request(self, request, *args, **kwargs):
+        request.upload_handlers.insert(
+            0,
+            AttachmentSizeLimitUploadHandler(request),
+        )
+        return super().initialize_request(request, *args, **kwargs)
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

@@ -44,6 +44,33 @@ def test_development_endpoints_are_absent_with_production_settings(path):
     assert result.returncode == 0, result.stderr
 
 
+def test_production_session_and_csrf_cookies_require_https():
+    production_environment = os.environ.copy()
+    production_environment.update(
+        {
+            'DJANGO_DEBUG': 'false',
+            'DJANGO_SECRET_KEY': 'synthetic-test-secret',
+            'DJANGO_ALLOWED_HOSTS': 'localhost',
+        }
+    )
+    cookie_check = '\n'.join(
+        [
+            'from django.conf import settings',
+            'assert settings.SESSION_COOKIE_SECURE is True',
+            'assert settings.CSRF_COOKIE_SECURE is True',
+        ]
+    )
+    result = subprocess.run(
+        [sys.executable, '-c', cookie_check],
+        check=False,
+        capture_output=True,
+        env=production_environment,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_redoc_uses_local_assets_and_schema():
     redoc_check = '\n'.join(
         [
