@@ -15,6 +15,20 @@
   JSON yoki biznes validatsiyasi `400`;
   mavjud bo‘lmagan yoki foydalanuvchi scope’idan tashqari obyekt `404`;
   yopiq HTTP metodi `405` qaytaradi.
+- Datetime qiymatlari UTC aware ko‘rinishda saqlanadi va API kontrakti UTC’ni
+  ishlatadi. `Asia/Tashkent` bo‘yicha lokal ko‘rsatish UI/API taqdimot
+  qatlamining mas’uliyati; serverdagi saqlangan vaqt o‘zgartirilmaydi.
+- Assignment vaqt oralig‘ida `available_at <= due_at <= closes_at`:
+  `available_at` ish ochiladigan vaqt, `due_at` topshirish muddati,
+  `closes_at` esa undan keyingi eng oxirgi yopilish vaqti. Ball `Decimal`
+  sifatida saqlanadi; binary `float` aniq o‘nlik ballar uchun ishlatilmaydi.
+- Rubrikada `Criterion` baholash mezoni va uning `max_points` chegarasini,
+  `Level` esa aynan shu mezon uchun tavsif va ball darajasini ifodalaydi.
+  Masalan, 6+3+1 balli mezonlar uchta alohida Criterion bo‘ladi. Level balli
+  0 yoki undan katta, o‘z Criterion’ining `max_points` qiymatidan oshmaydi.
+  Publish service har bir Criterion’da 0 balli Level borligini tekshiradi.
+  Criterion’larning `max_points` yig‘indisini qatorlararo DB CHECK bilan
+  tekshirib bo‘lmaydi; bu keyingi publish service vazifasi.
 
 ## Rollar va capability
 
@@ -344,6 +358,48 @@ curl http://127.0.0.1:8000/api/v1/topics/42/ \
 curl http://127.0.0.1:8000/api/v1/courses/12/pupils/ \
   -H "Authorization: ******"
 curl http://127.0.0.1:8000/api/v1/courses/12/topics/ \
+  -H "Authorization: ******"
+```
+
+### Assignment draftlari
+
+Faol ravishda kursga biriktirilgan teacher o‘z topic’iga draft vazifa
+yaratishi va faqat o‘zining scope’dagi draftini ko‘rishi mumkin. Pupil bu
+bosqichda assignment API’dan foydalana olmaydi. `state` server tomonidan
+`draft` qilib o‘rnatiladi; `teacher`, `published_at` va rubric maydonlari input
+emas.
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `POST /api/v1/assignments/` | ****** + faol assignment’li teacher; `topic`, `title`, `instructions`, `available_at`, `due_at`, `closes_at`, `max_score`, `max_attempts` | `201` — yaratilgan assignment, `state:"draft"` | Pupil `403`; begona/arxivlangan topic `404`; noto‘g‘ri sana yoki ortiqcha maydon `400` |
+| `GET /api/v1/assignments/<id>/` | ****** + faol biriktirilgan teacher; faqat o‘z drafti | `200` — assignment metadata | Pupil `403`; boshqa teacher, published vazifa yoki topilmagan ID `404` |
+
+Datetime UTC-aware ISO 8601 formatida yuboriladi; `available_at <= due_at <=
+closes_at` bo‘lishi shart. `max_score` musbat Decimal, `max_attempts` esa
+1–32767 oralig‘idagi butun son. Response `id`, `topic`, asosiy maydonlar va
+server belgilagan `state`ni qaytaradi; rubric bu endpointda yaratilmaydi.
+
+`POST /api/v1/assignments/`:
+
+```json
+{
+  "topic": 42,
+  "title": "Kasrlarni taqqoslash",
+  "instructions": "Javobni tushuntirib yozing.",
+  "available_at": "2026-11-10T09:00:00Z",
+  "due_at": "2026-11-14T12:00:00Z",
+  "closes_at": "2026-11-15T12:00:00Z",
+  "max_score": "10.00",
+  "max_attempts": 2
+}
+```
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/assignments/ \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"topic":42,"title":"Kasrlarni taqqoslash","instructions":"Javobni tushuntirib yozing.","available_at":"2026-11-10T09:00:00Z","due_at":"2026-11-14T12:00:00Z","closes_at":"2026-11-15T12:00:00Z","max_score":"10.00","max_attempts":2}'
+curl http://127.0.0.1:8000/api/v1/assignments/1/ \
   -H "Authorization: ******"
 ```
 

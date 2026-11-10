@@ -74,6 +74,7 @@ INSTALLED_APPS = [
     'accounts.apps.AccountsConfig',
     'academics.apps.AcademicsConfig',
     'learning.apps.LearningConfig',
+    'assignments.apps.AssignmentsConfig',
     'files.apps.FilesConfig',
     'apps.apps.AppsConfig',
     'rest_framework',

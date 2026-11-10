@@ -24,6 +24,7 @@ urlpatterns = [
     path('api/v1/', include('academics.urls')),
     path('api/v1/', include('learning.urls')),
     path('api/v1/', include('files.urls')),
+    path('api/v1/', include('assignments.urls')),
 ]
 
 if settings.DEBUG:
