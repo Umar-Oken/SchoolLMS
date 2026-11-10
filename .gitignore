@@ -42,4 +42,4 @@ __pycache__/
 .DS_Store
 Thumbs.db
 media/
-private_files/
+private_files/SECURITY_AUDIT_REPORT.md
