@@ -85,9 +85,10 @@ class AttachmentUploadView(GenericAPIView):
 @extend_schema(
     summary='Private faylni yuklab olish',
     description=(
-        'Faqat clean Attachment egasi yoki published mavzu ichidagi, '
-        'foydalanuvchi role/course scope’iga mos published PDF resurs orqali '
-        'ochiladi. Public media URL berilmaydi.'
+        'Faqat clean Attachment egasi, pupilning o‘z published assignment '
+        'drafti, teacherning faol kursidagi assignment revisioni yoki published '
+        'PDF resource’ning tegishli scope’i orqali ochiladi. Teacher draft '
+        'attachment’ni ololmaydi. Public media URL berilmaydi.'
     ),
     tags=['Files'],
     responses={

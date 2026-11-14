@@ -364,20 +364,339 @@ curl http://127.0.0.1:8000/api/v1/courses/12/topics/ \
 ### Assignment draftlari
 
 Faol ravishda kursga biriktirilgan teacher o‘z topic’iga draft vazifa
-yaratishi va faqat o‘zining scope’dagi draftini ko‘rishi mumkin. Pupil bu
-bosqichda assignment API’dan foydalana olmaydi. `state` server tomonidan
-`draft` qilib o‘rnatiladi; `teacher`, `published_at` va rubric maydonlari input
-emas.
+yaratishi va faqat o‘zining scope’dagi draftini ko‘rishi mumkin. Pupil esa faqat
+faol enrollment’i bor kurslardagi published topic va assignmentni ko‘radi.
+Assignment `available_at` vaqtidan oldin ham sarlavha, shart, deadline, ball
+hamda rubric metadata’sini ko‘rishi mumkin; bu hali topshirishga ruxsat degani
+emas. `state`, `published_at` va rubric maydonlari client tomonidan
+boshqarilmaydi.
 
 | Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
 |---|---|---|---|
 | `POST /api/v1/assignments/` | ****** + faol assignment’li teacher; `topic`, `title`, `instructions`, `available_at`, `due_at`, `closes_at`, `max_score`, `max_attempts` | `201` — yaratilgan assignment, `state:"draft"` | Pupil `403`; begona/arxivlangan topic `404`; noto‘g‘ri sana yoki ortiqcha maydon `400` |
-| `GET /api/v1/assignments/<id>/` | ****** + faol biriktirilgan teacher; faqat o‘z drafti | `200` — assignment metadata | Pupil `403`; boshqa teacher, published vazifa yoki topilmagan ID `404` |
+| `GET /api/v1/assignments/?course=<id>` | ****** + pupil; faqat faol enrollment va published topic/assignment | `200` — vazifalar, rubric, `availability_status`, `can_submit` | Teacher `403`; noto‘g‘ri course qiymati `400`; scope’dan tashqaridagi course bo‘sh ro‘yxat |
+| `GET /api/v1/assignments/<id>/` | ****** + teacher o‘z drafti uchun yoki pupil published assignment uchun | `200` — role doirasidagi metadata; pupil uchun rubric va vaqt holati ham | Boshqa scope, draft topic/assignment yoki faol bo‘lmagan enrollment `404`; boshqa role `403` |
+| `GET /api/v1/assignments/<id>/my-draft/` | ****** + joriy pupil, published assignment va faol enrollment | `200` — `submission_id`, `assignment`, `draft_text`, `draft_version`, `attachment_ids`; mavjud bo‘lmasa id `null`, text bo‘sh, version `0`, attachment list bo‘sh | Boshqa pupil/course, draft assignment yoki nofaol enrollment `404`; teacher `403` |
+| `PUT /api/v1/assignments/<id>/my-draft/` | ****** + joriy pupil; `draft_text`, hozirgi `draft_version`, ixtiyoriy `attachment_ids` | `200` — saqlangan qoralama, oshirilgan version va attachment ID’lari | Eskirgan version `409`; begona/pending fayl, 3 tadan ko‘p yoki band fayl va ortiqcha `pupil` maydoni `400`; scope `404` |
+| `POST /api/v1/assignments/<id>/submit/` | ****** + joriy pupil; `Idempotency-Key` header va joriy `draft_version` | `201` — `submission_id`, `revision_id`, `revision_number`, `draft_version`, `submitted_at`, `is_late`, `attachment_ids` | Boshqa input bilan ayni key `409`; stale version `409`; bo‘sh key `400`; bo‘sh ish, available_at’dan oldin, closes_at’dan keyin yoki attempt limiti `400`; scope/enrollment `404` |
+| `POST /api/v1/submissions/<id>/return/` | ****** + shu kursga faol assigned teacher; `reason` (1–2000 belgi) | `201` — qaytarilgan `revision_id`, `revision_number`, ochilgan `draft_version`, `returned_at`, sabab | Begona teacher yoki submitted bo‘lmagan ish `404`; takror return yoki noto‘g‘ri sabab `400` |
+| `PUT /api/v1/revisions/<id>/grade/` | ****** + revision kursiga faol `can_grade` teacher; `version`, `feedback`, barcha `criterion_scores` | `200` — draft Grade, server hisoblagan `total`, oshirilgan `version` va criterion ballari | Yetishmagan/begona/takror criterion yoki limitdan katta ball `400`; stale version `409`; pupil/begona teacher `403/404` |
+| `POST /api/v1/revisions/<id>/grade/publish/` | ****** + shu kursning faol `can_grade` teacher; `grade_version`, `revision_version` | `200` — published Grade, server total, `published_at` va criterion ballari | Stale grade/revision version `409`; noto‘g‘ri revision yoki begona teacher `404`; to‘liq bo‘lmagan/limitdan tashqari rubric ballari `400` |
+| `GET /api/v1/revisions/<id>/grade/` | ****** + revision egasi pupil, faol enrollment | `200` — faqat o‘zining published bahosi | Draft, boshqa pupil/revision yoki enrollment scope tashqarisi `404`; teacher `403` |
+| `POST /api/v1/revisions/<id>/grade/regrade/` | ****** + shu kursning faol `can_grade` teacher; `expected_version`, barcha `criterion_scores`, majburiy `reason` | `200` — qayta hisoblangan va darhol published Grade | Sababsiz/noto‘g‘ri rubric `400`; stale version `409`; scope tashqarisi `404` |
+| `GET /api/v1/me/gradebook/?course=<id>&term=<id>` | ****** + `request.user` pupil; faqat faol enrollment va published assignment | `200` — vazifa, holat, eng so‘nggi published grade va oldingi revision baholari | Noto‘g‘ri filter ID `400`; enrollment scope’dan tashqaridagi course bo‘sh ro‘yxat; teacher `403` |
+| `GET /api/v1/courses/<id>/gradebook/` | ****** + kursga faol biriktirilgan teacher | `200` — topshirilgan ishlari bor pupil/submissionlar va eng so‘nggi revision/baho holati | Boshqa course `404`; pupil `403` |
+| `GET /api/v1/assignments/<id>/submissions/` | ****** + vazifa kursiga faol biriktirilgan teacher | `200` — shu published vazifaning submitted/draft/graded/returned navbati | Boshqa teacher/vazifa `404`; pupil `403` |
+| `PUT /api/v1/assignments/<id>/rubric/` | ****** + faol biriktirilgan teacher; to‘liq `criteria` va har bir criterion uchun to‘liq `levels` replacement’i | `200` — saqlangan rubric va child ID’lari | Noto‘g‘ri child ID, ball limiti yoki body `400`; pupil `403`; boshqa teacher/published vazifa `404` |
+| `POST /api/v1/assignments/<id>/publish/` | ****** + faol biriktirilgan teacher; body kerak emas | `200` — `state:"published"`, `published_at`, `rubric_version:1` | To‘liq bo‘lmagan assignment/rubric `400`; pupil `403`; boshqa teacher yoki arxivlangan topic `404` |
+
+`my-draft` GET mavjud qoralamani o‘qiydi, lekin hali yozuv bo‘lmasa DB qatorini
+yaratmaydi va `{ "submission_id": null, "assignment": 42, "draft_text": "",
+"draft_version": 0, "attachment_ids": [] }` qaytaradi. PUT’da GET’dan olingan
+`draft_version`ni yuborish shart; muvaffaqiyatli saqlash bitta `Submission`
+konteynerini yaratadi yoki yangilaydi va versionni bittaga oshiradi. Eskirgan
+version `409` qaytaradi hamda yangiroq matnni bosib yozmaydi. Ixtiyoriy
+`attachment_ids` berilganda u draft fayllari ro‘yxatini to‘liq almashtiradi;
+maydon yuborilmasa amaldagi ro‘yxat saqlanadi, bo‘sh `[]` yuborilsa hammasi
+draftdan ajratiladi. Ro‘yxat maksimum 3 ta takrorlanmagan ID’dan iborat bo‘lishi
+kerak; har bir Attachment joriy pupilga tegishli va `clean` scan holatida
+bo‘lishi shart. Bir fayl bir vaqtda faqat bitta draft yoki revisionga
+biriktiriladi. Draftdan ajratilgach u boshqa draftga biriktirilishi mumkin;
+revisionga biriktirilgan faylni qayta ishlatib yoki draftga ko‘chirib bo‘lmaydi.
+Bog‘lanishlar va draft matn/version bitta transaction’da saqlanadi; bitta fayl
+xatosi yoki stale version butun update’ni rollback qiladi.
+
+Pupil faqat o‘zining faol enrollment’i bor kursdagi published assignmentga
+biriktirilgan clean draft faylini yuklab oladi; available_at hali kelmagan
+bo‘lsa ham draft metadata ko‘rinadi, ammo bu submit ruxsati emas. Teacher
+assignmentni ko‘rish huquqiga ega bo‘lsa ham draft faylini ko‘rmaydi; private
+download faqat assigned course scope’dagi revisionga bog‘langan fayl uchun
+ochiladi. Pupil identity faqat tekshirilgan
+session/JWT’dagi `request.user`dan olinadi; body’dagi `pupil` kabi noma’lum
+maydonlar `400` qaytaradi. `Submission` tahrirlanadigan draftni saqlaydi;
+`SubmissionRevision` final submitdagi o‘zgarmas snapshot. Unda yuborilgan draft
+versiyasi, server vaqti va late belgisi ham saqlanadi.
+
+`POST /api/v1/assignments/<id>/submit/` faqat `{"draft_version": 2}` qabul
+qiladi. Assignment `available_at <= now <= closes_at` bo‘lishi kerak. `now`
+`due_at`ga teng bo‘lsa `is_late=false`; undan keyin, `closes_at`ga teng vaqtni
+ham qo‘shib, `is_late=true`. `closes_at`dan keyin submit yopiladi. Draftda
+bo‘sh bo‘lmagan matn yoki kamida bitta clean fayl bo‘lishi shart.
+`revision_number` `max_attempts`dan oshmaydi; ayni `draft_version`ni qayta
+yuborish boshqa key bilan kelsa `409` qaytaradi. `Idempotency-Key` har submit
+uchun majburiy, bo‘sh bo‘lmasligi va 255 belgidan oshmasligi kerak. Key
+`pupil + assignment + key` doirasida ishlaydi; ayni key va ayni
+`draft_version` oldingi `201` receipt’ni qaytaradi, boshqa version esa `409`
+qaytaradi. Receipt va `revision_number` bir transaction’da DBga saqlanadi.
+Shu sababli timeout ortidan deadline yopilgan bo‘lsa ham muvaffaqiyatli
+so‘rovni ayni key bilan takrorlash yangi submit emas, oldingi receipt bo‘ladi.
+Draftning yangi versiyasi yangi idempotency key bilan navbatdagi ruxsat etilgan
+urinish bo‘lishi mumkin. Umumiy endpoint framework’i, return flow va
+notification bu bosqichga kirmaydi.
+
+Service avval Assignment, keyin Submission qatorini lock qiladi. Fayllar clean
+holatda qayta tekshiriladi; draft matni, fayl bog‘lanishlari va server
+belgilaydigan `submitted_at`/`is_late` bitta transaction’da revisionga
+saqlanadi. Xato bo‘lsa revision ham, fayl ko‘chirish ham rollback bo‘ladi.
+Keyinchalik draft tahrirlanishi mumkin, ammo yaratilgan revision matni va
+fayllari o‘zgarmaydi.
+
+Faol `can_grade` teacher `PUT /api/v1/revisions/<id>/grade/` orqali draft
+baho yozadi. Body’da `version`, umumiy `feedback` va rubric’dagi har criterion
+uchun aynan bitta `criterion_id`, `points` va ixtiyoriy feedback yuboriladi.
+Begona, takror yoki tushib qolgan criterion, shuningdek criterion maksimumidan
+katta ball `400` bilan rad etiladi. `version` eskirgan bo‘lsa `409`; birinchi
+PUT `0` qabul qiladi va muvaffaqiyatda uni `1` qiladi. Grade draft holatida
+qoladi va bu endpoint uni pupilga ko‘rsatmaydi. `Grade.total`ni server rubric
+ballarining Decimal yig‘indisidan hisoblaydi; client `total` yuborsa strict
+serializer rad etadi. Masalan, `5/6 + 2/3 + 1/1` natijasi `8.00/10.00`.
+
+Teacher draftni `POST /api/v1/revisions/<id>/grade/publish/` orqali e’lon
+qilganida `grade_version` va submitted snapshot’ning `revision_version`
+(`submitted_version`) yuboradi:
+
+```json
+{
+  "grade_version": 1,
+  "revision_version": 1
+}
+```
+
+Server faol `can_grade` huquq, revision va grade versiyalarini hamda rubricni
+qayta tekshiradi: har criterion uchun yagona score bo‘lishi, score rubric
+`max_points` chegarasida bo‘lishi va Grade total server hisoblagan yig‘indiga
+teng bo‘lishi shart. Publish `state`, `published_at`, version va `GradeRevision`
+audit yozuvini bitta transaction’da saqlaydi. Takror publish published Grade’ni
+o‘zgartirmaydi va ikkinchi audit yozuvini yaratmaydi. Qayta baholash bu bosqichga
+kirmaydi.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/revisions/91/grade/publish/ \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"grade_version":1,"revision_version":1}'
+curl http://127.0.0.1:8000/api/v1/revisions/91/grade/ \
+  -H "Authorization: ******"
+```
+
+Pupil GET endpoint faqat o‘ziga tegishli, published baho va faol enrollment
+doirasidagi revision’ni qaytaradi; draft yoki boshqa pupil bahosi `404`.
+
+Faol `can_grade` teacher e’lon qilingan bahoni
+`POST /api/v1/revisions/<id>/grade/regrade/` bilan qayta ko‘rib chiqishi
+mumkin. `expected_version` joriy Grade versiyasiga teng bo‘lishi, har rubric
+criterion’ga ball berilishi, client `total` yubormasligi ва `reason` хоосон
+бўлмаслиги шарт:
+
+```json
+{
+  "expected_version": 2,
+  "criterion_scores": [
+    {"criterion_id": 11, "points": "6.00", "feedback": "To‘liq dalil."},
+    {"criterion_id": 12, "points": "1.00", "feedback": "Qisman izoh."},
+    {"criterion_id": 13, "points": "0.00", "feedback": "Mezon bajarilmadi."}
+  ],
+  "reason": "Dalil mezoni qayta ko‘rib chiqildi."
+}
+```
+
+Yangi natija shu transaction’da qayta publish qilinadi: pupil doim oxirgi
+tasdiqlangan bahoni ko‘radi. `published_at` va `version` yangilanadi; har
+qayta baholash `GradeRevision`ga eski/yangi total, umumiy feedback, grader va
+vaqt, criterion ballari/feedback snapshot’larini hamda majburiy sababni
+saqlaydi. Audit yozuvlari model darajasida tahrirlanmaydi/o‘chirilmaydi.
+Eskirgan version `409`, begona teacher/revision `404`, noto‘g‘ri ball yoki
+bo‘sh sabab `400` qaytaradi.
+
+Pupilning shaxsiy jurnali `GET /api/v1/me/gradebook/` orqali olinadi. Ixtiyoriy
+`course` va `term` query filterlari faqat joriy pupilning faol enrollment
+doirasida ishlaydi. Har bir published assignment uchun `status`:
+
+- `missing`: pupil hali revision yubormadi;
+- `ungraded`: eng so‘nggi revision hali published bahoga ega emas;
+- `returned`: eng so‘nggi revision teacher tomonidan qaytarilgan;
+- `graded`: eng so‘nggi revision published bahoga ega.
+
+`current_grade` eng yuqori revision raqamidagi published bahoni ko‘rsatadi;
+undan oldingi published baholar `history` ro‘yxatida qoladi. Shu sabab yangi
+revision hali baholanmagan bo‘lsa `status=ungraded`, lekin `current_grade`
+avvalgi published natijani saqlab ko‘rsatishi mumkin. `current_grade: null`
+published baho yo‘qligini, `total: "0.00"` haqiqiy nol bahoni bildiradi.
+Criterion feedback har bir published grade ichida qaytariladi. Bu API chorak
+yakuniy bahosini hisoblamaydi.
+
+```bash
+curl "http://127.0.0.1:8000/api/v1/me/gradebook/?course=42&term=3" \
+  -H "Authorization: ******"
+```
+
+Faol kursga biriktirilgan teacher `GET /api/v1/courses/<id>/gradebook/` yoki
+alohida vazifa uchun `GET /api/v1/assignments/<id>/submissions/` orqali
+tekshirish navbatini oladi. Ikkala javob pupil ID/ism/familiyasi, assignment
+ID/sarlavhasi va eng so‘nggi submitted revision raqami, vaqti, late belgisi
+hamda draft/published Grade xulosasini beradi. Status `submitted` — baho yo‘q,
+`draft` — baho draftda, `graded` — baho published, `returned` — oxirgi revision
+qaytarilgan. Faqat revisioni bor submissionlar navbatga kiradi; draft matn,
+attachment, email va ortiqcha profil maydonlari chiqarilmaydi. Faol biriktirilmagan
+teacher `404`, pupil `403` oladi.
+
+```json
+{
+  "version": 0,
+  "feedback": "Yaxshi asoslangan javob.",
+  "criterion_scores": [
+    {"criterion_id": 11, "points": "5.00", "feedback": "Dalil aniq."},
+    {"criterion_id": 12, "points": "2.00", "feedback": "Izoh bor."},
+    {"criterion_id": 13, "points": "1.00", "feedback": "To‘liq."}
+  ]
+}
+```
+
+Teacher yuborilgan ishni `POST /api/v1/submissions/<id>/return/` orqali
+`{"reason":"Dalillarni to‘ldiring."}` sababi bilan qaytaradi. Faqat faol
+assigned teacher o‘z kursidagi published assignment uchun qaytara oladi;
+submission’da kamida bitta revision bo‘lishi shart. Return revision yoki
+fayllarni o‘chirmaydi: return yozuvi sabab va teacher/vaqtni saqlaydi; yangi
+draft ochilganda avvalgi yuborilgan matn draftga ko‘chadi va version oshadi.
+Revision attachment’lari revisionda qoladi, yangi draftga avtomatik
+ko‘chirilmaydi. Submit qilingandan keyin teacher return qilmaguncha pupil draft
+PUT qila olmaydi. Return deadline’ni uzaytirmaydi; `closes_at` o‘tgan bo‘lsa
+qayta submit yopiq qoladi. `max_attempts` barcha revisionlarni hisoblaydi.
+
+```json
+{
+  "draft_text": "Mening yechim qoralamam",
+  "draft_version": 0,
+  "attachment_ids": [17, 18]
+}
+```
+
+```bash
+curl http://127.0.0.1:8000/api/v1/assignments/1/my-draft/ \
+  -H "Authorization: ******"
+curl -X PUT http://127.0.0.1:8000/api/v1/assignments/1/my-draft/ \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"draft_text":"Mening yechim qoralamam","draft_version":0,"attachment_ids":[17,18]}'
+curl -X POST http://127.0.0.1:8000/api/v1/assignments/1/submit/ \
+  -H "Authorization: ******" \
+  -H "Idempotency-Key: pupil-42-assignment-1-submit-001" \
+  -H "Content-Type: application/json" \
+  -d '{"draft_version":1}'
+curl -X POST http://127.0.0.1:8000/api/v1/submissions/7/return/ \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"Dalillarni to‘ldiring."}'
+```
+
+Bir xil yuborishning xavfsiz retry namunasi:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/assignments/1/submit/ \
+  -H "Authorization: ******" \
+  -H "Idempotency-Key: pupil-42-assignment-1-submit-001" \
+  -H "Content-Type: application/json" \
+  -d '{"draft_version":1}'
+```
+
+Submit muvaffaqiyatli javobining namunasi (`201`):
+
+```json
+{
+  "submission_id": 73,
+  "revision_id": 91,
+  "revision_number": 1,
+  "draft_version": 2,
+  "submitted_at": "2026-11-14T18:00:00Z",
+  "is_late": false,
+  "attachment_ids": [17]
+}
+```
+
+Submit xatolarida noto‘g‘ri/missing idempotency key yoki bo‘sh ish `400`,
+stale version yoki bir key’ni boshqa input bilan ishlatish `409`, enrollment
+yoki assignment scope tashqarisida bo‘lish `404` qaytaradi. Muvaffaqiyatli
+key’ni qayta yuborish oldingi `201` body’ni qaytaradi va ikkinchi revision
+yaratmaydi.
+
+`GET /api/v1/attachments/<id>/download/` clean file’ni egasi, pupilning o‘z
+submission draft relation’i yoki assigned teacher’ning revision relation’i
+doirasida beradi. Teacher draft attachment’iga `404` oladi. Published PDF
+Resource uchun avvalgi course-scope qoidasi o‘zgarishsiz qoladi.
+
+Pupil javobidagi `availability_status` qiymatlari: `upcoming` — `available_at`
+hali kelmagan; `on_time` — mavjud va `due_at`gacha, shu jumladan aynan due
+vaqtida; `late` — `due_at`dan keyin, `closes_at`gacha, shu jumladan aynan
+close vaqtida; `closed` — `closes_at`dan keyin. `can_submit` shu vaqt
+chegaralariga asoslangan maslahat qiymati, submit huquqining yakuniy tekshiruvi
+emas; server submit paytida vaqt chegaralarini qayta tekshiradi. Kech
+topshirishga avtomatik penalty bu bosqichga kirmaydi.
 
 Datetime UTC-aware ISO 8601 formatida yuboriladi; `available_at <= due_at <=
 closes_at` bo‘lishi shart. `max_score` musbat Decimal, `max_attempts` esa
 1–32767 oralig‘idagi butun son. Response `id`, `topic`, asosiy maydonlar va
 server belgilagan `state`ni qaytaradi; rubric bu endpointda yaratilmaydi.
+Keyingi baholash modeli `Grade.total`ni server hisoblaydi; pupil request’idan
+yakuniy total qabul qilinmaydi. `total=null` baho hali kiritilmaganini, `0.00`
+esa baholangan ish uchun haqiqiy nol ballni bildiradi.
+Publish faqat sarlavha va shart bo‘sh bo‘lmaganda, deadline’lar
+`available_at <= due_at <= closes_at` tartibida, criterion’larning
+`max_points` yig‘indisi assignment `max_score`iga teng va har bir criterion’da
+kamida bitta 0 ballli level mavjud bo‘lganda muvaffaqiyatli bo‘ladi.
+Assignment row lock ostida tekshiriladi va `state`, `published_at`,
+`rubric_version=1` bitta transaction’da saqlanadi. Takroriy publish mavjud
+`published_at`/version’ni o‘zgartirmaydi va yangi qator yaratmaydi. Published
+assignment uchun oddiy update endpointi yo‘q, rubric replacement ham yopiq.
+Notification bu bosqichda yuborilmaydi.
+
+Rubric `PUT` replacement hisoblanadi, PATCH emas. Har bir criterion va level’da
+`id` bo‘lmasa yangi child yaratiladi; mavjud child’ni o‘zgartirish uchun uning
+ID’si shu assignment (level bo‘lsa, aynan yuborilgan criterion) ichida bo‘lishi
+kerak. So‘rovda qoldirilmagan criterion o‘chadi va uning level’lari cascade
+orqali o‘chadi; yuborilgan criterion ichida qoldirilmagan level ham o‘chadi.
+Mavjud ID saqlanib, child maydonlari yangilanadi. Barcha tekshiruv va yozuvlar
+bitta transaction’da bajariladi; bitta qator xatosi butun replacement’ni
+rollback qiladi. Published assignment rubricini o‘zgartirib bo‘lmaydi.
+
+`PUT /api/v1/assignments/<id>/rubric/` body namunasi:
+
+```json
+{
+  "criteria": [
+    {
+      "id": 3,
+      "label": "Dalillar",
+      "max_points": "6.00",
+      "position": 0,
+      "levels": [
+        {
+          "id": 5,
+          "description": "To‘liq dalil keltiradi",
+          "points": "6.00",
+          "position": 0
+        },
+        {
+          "description": "Qisman dalil keltiradi",
+          "points": "3.00",
+          "position": 1
+        }
+      ]
+    }
+  ]
+}
+```
+
+Level ballari manfiy bo‘lmasligi va o‘z criterion’ining `max_points`idan
+oshmasligi, sibling position’lar takrorlanmasligi kerak. Bo‘sh `criteria` barcha
+criterion va level’larni o‘chiradi; bo‘sh `levels` shu criterion’ning barcha
+level’larini o‘chiradi.
+
+```bash
+curl -X PUT http://127.0.0.1:8000/api/v1/assignments/1/rubric/ \
+  -H "Authorization: ******" \
+  -H "Content-Type: application/json" \
+  -d '{"criteria":[{"label":"Dalillar","max_points":"6.00","position":0,"levels":[{"description":"To‘liq","points":"6.00","position":0}]}]}'
+```
 
 `POST /api/v1/assignments/`:
 
@@ -400,6 +719,8 @@ curl -X POST http://127.0.0.1:8000/api/v1/assignments/ \
   -H "Content-Type: application/json" \
   -d '{"topic":42,"title":"Kasrlarni taqqoslash","instructions":"Javobni tushuntirib yozing.","available_at":"2026-11-10T09:00:00Z","due_at":"2026-11-14T12:00:00Z","closes_at":"2026-11-15T12:00:00Z","max_score":"10.00","max_attempts":2}'
 curl http://127.0.0.1:8000/api/v1/assignments/1/ \
+  -H "Authorization: ******"
+curl -X POST http://127.0.0.1:8000/api/v1/assignments/1/publish/ \
   -H "Authorization: ******"
 ```
 

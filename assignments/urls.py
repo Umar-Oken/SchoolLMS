@@ -1,8 +1,32 @@
 from django.urls import path
 
-from assignments.views import AssignmentCreateView, AssignmentDetailView
+from assignments.views import (
+    AssignmentCreateView,
+    AssignmentDetailView,
+    AssignmentMyDraftView,
+    AssignmentPublishView,
+    AssignmentRubricView,
+    AssignmentSubmitView,
+    AssignmentSubmissionQueueView,
+    CourseTeacherGradebookView,
+    GradePublishView,
+    GradeRegradeView,
+    PupilGradebookView,
+    RevisionGradeDraftView,
+    SubmissionReturnView,
+)
 
 urlpatterns = [
+    path(
+        'courses/<int:pk>/gradebook/',
+        CourseTeacherGradebookView.as_view(),
+        name='course-teacher-gradebook',
+    ),
+    path(
+        'me/gradebook/',
+        PupilGradebookView.as_view(),
+        name='pupil-gradebook',
+    ),
     path(
         'assignments/',
         AssignmentCreateView.as_view(),
@@ -12,5 +36,50 @@ urlpatterns = [
         'assignments/<int:pk>/',
         AssignmentDetailView.as_view(),
         name='assignment-detail',
+    ),
+    path(
+        'assignments/<int:pk>/my-draft/',
+        AssignmentMyDraftView.as_view(),
+        name='assignment-my-draft',
+    ),
+    path(
+        'assignments/<int:pk>/submit/',
+        AssignmentSubmitView.as_view(),
+        name='assignment-submit',
+    ),
+    path(
+        'assignments/<int:pk>/submissions/',
+        AssignmentSubmissionQueueView.as_view(),
+        name='assignment-submission-queue',
+    ),
+    path(
+        'submissions/<int:pk>/return/',
+        SubmissionReturnView.as_view(),
+        name='submission-return',
+    ),
+    path(
+        'revisions/<int:pk>/grade/',
+        RevisionGradeDraftView.as_view(),
+        name='revision-grade-draft',
+    ),
+    path(
+        'revisions/<int:pk>/grade/publish/',
+        GradePublishView.as_view(),
+        name='revision-grade-publish',
+    ),
+    path(
+        'revisions/<int:pk>/grade/regrade/',
+        GradeRegradeView.as_view(),
+        name='revision-grade-regrade',
+    ),
+    path(
+        'assignments/<int:pk>/rubric/',
+        AssignmentRubricView.as_view(),
+        name='assignment-rubric',
+    ),
+    path(
+        'assignments/<int:pk>/publish/',
+        AssignmentPublishView.as_view(),
+        name='assignment-publish',
     ),
 ]
