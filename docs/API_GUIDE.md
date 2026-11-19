@@ -11,6 +11,7 @@
 - API JWT Bearer token ishlatadi. Login, logout va account-create uchun CSRF
   token talab qilinmaydi; boshqa API write so‘rovlari ham Bearer token bilan
   ishlaydi. Django admin/session hamda CSRF middleware himoyasi saqlanadi.
+- Access va refresh tokenlar 1 kun amal qiladi.
 - Autentifikatsiyasiz so‘rov `401`, permission rad etilganda `403`; noto‘g‘ri
   JSON yoki biznes validatsiyasi `400`;
   mavjud bo‘lmagan yoki foydalanuvchi scope’idan tashqari obyekt `404`;
@@ -50,6 +51,143 @@ Course list/detail teacher assignment va pupil enrollment bo‘yicha scope qilin
 Topic’ni faqat tegishli kursga biriktirilgan faol teacher yaratadi/tahrirlaydi;
 pupil faqat published mavzuni o‘qiydi. Yopiq termga topic yaratish, tahrirlash
 yoki publish qilish rad etiladi.
+
+## Haftalik dars jadvali
+
+`WeeklySlot` haftaning tanlangan kunida, `valid_from` va ixtiyoriy `valid_to`
+oralig‘ida takrorlanadigan qoidani bildiradi; u ma’lum bir sanada o‘tgan dars
+yoki davomat yozuvi emas. `start_time` va `end_time` maktabning mahalliy
+devor-soati vaqtidir (`TimeField`); bu loyiha uchun maktab vaqt mintaqasi
+`Asia/Tashkent`, UTC datetime emas. Kelajakda aniq sana uchun hodisa
+yaratilganda sana va `Asia/Tashkent` vaqt mintaqasi birlashtirilib, UTC-aware
+datetime’ga aylantirilishi kerak. Hozirgi qism bunday hodisalarni yaratmaydi.
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `GET/POST /api/v1/admin/rooms/` | Authenticated o‘qiydi; yaratish `manage_academics` talab qiladi; POST `{"name":"101-xona"}` | `200` ro‘yxat yoki `201 {"id":1,"name":"101-xona"}` | Takror nom/input `400`; write permission `403` |
+| `GET/PUT/PATCH /api/v1/admin/rooms/<id>/` | Authenticated o‘qiydi; write `manage_academics` talab qiladi | Room; update uchun `{"name":"102-xona"}` | Input `400`; permission `403`; topilmasa `404` |
+| `GET/POST /api/v1/admin/weekly-slots/` | Authenticated o‘qiydi; yaratish `manage_academics` talab qiladi | `200` ro‘yxat yoki `201` slot | Interval yoki teacher/course xatosi `400`; write permission `403` |
+| `GET/PUT/PATCH /api/v1/admin/weekly-slots/<id>/` | Authenticated o‘qiydi; write `manage_academics` talab qiladi | Slot; PATCH’da o‘zgaradigan maydonlar | Interval yoki teacher/course xatosi `400`; permission `403`; topilmasa `404` |
+
+Slot body misoli:
+
+```json
+{
+  "course": 12,
+  "teacher": 7,
+  "room": 1,
+  "weekday": 0,
+  "start_time": "09:00:00",
+  "end_time": "09:45:00",
+  "valid_from": "2026-09-01",
+  "valid_to": null
+}
+```
+
+`weekday` 0–6: dushanba–yakshanba. `valid_to: null` bo‘lsa qoida muddatsiz
+amal qiladi. Vaqt oralig‘i va amal qilish sanasi bo‘sh bo‘lmasligi hamda
+boshlanishi tugashidan oldin bo‘lishi shart; teacher `teacher` rolida va
+ko‘rsatilgan course’ga `TeachingAssignment` bilan biriktirilgan bo‘lishi kerak.
+Oddiy teacher va pupil jadvalni faqat o‘qiydi.
+
+Slotlar bir xil hafta kuni, kalendar sanalari kesishgan va vaqt oralig‘i
+kesishgan bo‘lsa xona, teacher yoki sinf bo‘yicha konflikt hisoblanadi.
+Sanalar `valid_from` va `valid_to`-gacha (inclusive) hisobga olinadi;
+`valid_to: null` ochiq tugashni anglatadi. Vaqtlar yarim ochiq `[start, end)`
+oralig‘ini bildiradi, shuning uchun `08:00–08:45` va `08:45–09:30` tutash
+intervallari konflikt emas. Slot create/update bitta `TimetableLock` qatorini
+`select_for_update()` bilan qulflab, konflikt tekshiruvi va yozishni bitta
+transaction’da bajaradi; parallel so‘rovlar bir vaqtda konfliktli slot
+yarata olmaydi.
+
+`GET /api/v1/schedule/?from=2026-11-16&to=2026-11-30` `LessonSession`larni
+so‘ralgan mahalliy sana oynasi bo‘yicha qaytaradi; ikkala sana ham kiritilishi
+va oraliq 31 kalendar kundan oshmasligi kerak. Teacher faqat shu slotdagi o‘zi
+bo‘lgan va dars sanasida kursga biriktirilgan sessionlarni; pupil esa o‘sha
+sanada kursga enrollment’i amalda bo‘lgan sessionlarni ko‘radi. `starts_at` va
+`ends_at` UTC datetime, `local_date` esa haftalik slotdan kelib chiqqan asl
+occurrence sana, `scheduled_date` esa amaldagi sana.
+
+Haftalik qoida recurrence’ni belgilaydi; bitta occurrence’ni bekor qilish yoki
+ko‘chirish esa faqat o‘sha `LessonSession`ga istisno qo‘llaydi va boshqa
+haftalardagi slot/sessionlarni o‘zgartirmaydi.
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `POST /api/v1/admin/lesson-sessions/<id>/exception/` | `manage_academics`; bekor qilish `{"action":"cancelled","reason":"..."}` | `200` — sessionning joriy holati | Noto‘g‘ri input `400`; conflict/course scope `400`; permission `403`; topilmasa `404` |
+| `PUT /api/v1/sessions/<id>/attendance/` | Session sanasida shu course’ga biriktirilgan amaldagi teacher; JSON array | `200` — session ID va yuborilgan pupil holatlari | Noto‘g‘ri qator yoki bekor qilingan session `400`; ruxsat `403`; topilmasa `404` |
+| `GET /api/v1/sessions/<id>/attendance/` | Shu session sanasidagi biriktirilgan teacher | `200` — course rosteri, joriy holatlar, tuzatish tarixi va summary | Ruxsat `403`; topilmasa `404` |
+| `GET /api/v1/me/attendance/?from=&to=` | Faqat pupil; majburiy sana oynasi, ko‘pi bilan 31 kun | `200` — faqat o‘z sessionlari va summary | Noto‘g‘ri oyna `400`; ruxsat `403` |
+
+Bekor qilish uchun session saqlanadi (`status=cancelled`), `ScheduleException`
+audit yozuvi actor, sabab va oldingi/yangi holat bilan yoziladi. Ko‘chirishda
+`action=moved`, `reason`, `scheduled_date`, `start_time`, `end_time` va
+ixtiyoriy `teacher`, `room` yuboring. O‘rinbosar teacher ko‘chirish sanasida
+shu course’ga biriktirilgan bo‘lishi shart. Yozuv `TimetableLock` ostida bitta
+transaction’da P050’ning xona/teacher/sinf overlap qoidalari va o‘sha kundagi
+sessionlar bilan solishtiriladi; konflikt bo‘lsa na audit, na session
+o‘zgarishi saqlanadi. Istisno yozuvlarini update/delete qilish taqiqlangan.
+
+### Dars davomatini belgilash
+
+`PUT /api/v1/sessions/<id>/attendance/` faqat sessionning amaldagi teacher’i
+uchun ochiq; ko‘chirilgan sessionda teacher session sanasidagi
+`TeachingAssignment` bilan tasdiqlanadi. Bekor qilingan sessionga yozish
+rad etiladi. Body — pupil va holat qatorlaridan iborat JSON array:
+
+```json
+[
+  {"pupil": 42, "status": "present"},
+  {"pupil": 43, "status": "excused"}
+]
+```
+
+Holatlar `present`, `absent`, `late`, `excused` va `unmarked`. Har bir pupil
+sessionning amaldagi (`scheduled_date`) sanasida shu course’ga enrollment’da
+bo‘lishi kerak. Takroriy pupil yoki bitta noto‘g‘ri qator butun batch’ni bekor
+qiladi; yuborilmagan pupilning mavjud davomat yozuvi o‘zgarmaydi va yangi
+`absent` avtomatik yaratilmaydi. Birinchi marta yozilayotgan holat uchun
+o‘zgarish sababi talab qilinmaydi. Mavjud holat o‘zgartirilganda `reason`
+majburiy bo‘lib, eski/yangi holat, sabab va actor append-only auditga yoziladi;
+holat o‘zgarmagan so‘rov audit yaratmaydi. Javob session ID va yuborilgan
+pupillarning saqlangan holatlarini qaytaradi.
+
+Yozuvlar va audit bitta transaction’da saqlanadi; status validatsiyasi yoki
+enrollment tekshiruvi batch’ning biror qatorida xato bersa, qisman write
+saqlanmaydi.
+
+Pupil o‘z tarixini `GET /api/v1/me/attendance/?from=2026-11-01&to=2026-11-30`
+orqali ko‘radi. Teacher yuqoridagi session GET orqali faqat o‘ziga biriktirilgan
+darsning enrollment rosteri va davomatini ko‘radi; corrected status bilan
+birga auditdagi oldingi/yangi holat, sabab, actor ID va vaqt qaytadi. Summary
+joriy holatlarni sanaydi: `eligible_lessons` (pupil) yoki `eligible_pupils`
+(teacher) maxraj, `marked_lessons`/`marked_pupils` esa `unmarked`dan boshqa
+holatlar soni. Pupil summary uchun dars sanasida enrollment’i bo‘lgan va
+bekor qilinmagan har bir session maxrajga kiradi; teacher session summary’da
+bekor qilinmagan dars rosteri hisoblanadi. Bekor qilingan dars pupil tarixidan
+chiqariladi; teacher uni ko‘rishi mumkin, ammo summary qiymatlari nol bo‘ladi.
+Attendance qatori yo‘qligi va `unmarked` ikkalasi ham “hali belgilanmagan” deb
+ko‘rsatiladi, lekin `present` hisoblanmaydi. Tuzatishdan keyin summary yangi
+joriy statusni oladi; tarixiy audit yozuvlari esa o‘zgarmaydi. Bu summary
+rasmiy davomat reytingi emas.
+
+Materializatsiyani kerakli sana oynasi uchun qo‘lda ishga tushiring:
+
+```sh
+python manage.py materialize_lessons --from 2026-11-16 --to 2026-11-30
+```
+
+Oyna ko‘pi bilan 31 kun; bir xil commandni qayta bajarish `(slot, local_date)`
+unikalligi sabab duplicate yaratmaydi. Generator faqat manual management
+command/service; avtomatik Celery jadvali yo‘q.
+
+Manbalar: [DRF generic views](https://www.django-rest-framework.org/api-guide/generic-views/),
+[DRF validators](https://www.django-rest-framework.org/api-guide/validators/),
+[PostgreSQL constraints](https://www.postgresql.org/docs/current/ddl-constraints.html),
+[Django transactions](https://docs.djangoproject.com/en/5.2/topics/db/transactions/),
+[PostgreSQL explicit locking](https://www.postgresql.org/docs/current/explicit-locking.html),
+[DRF permissions](https://www.django-rest-framework.org/api-guide/permissions/),
+[DRF testing](https://www.django-rest-framework.org/api-guide/testing/).
 
 ## Endpointlar
 

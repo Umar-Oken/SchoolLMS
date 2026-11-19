@@ -185,6 +185,86 @@
   tekshirishi shart; assignment listi, capability grant API va dars o‘rinbosari
   bu bosqichga kirmaydi.
 
+## P049–P050 weekly jadval
+
+- `scheduling.Room` xona nomini, `WeeklySlot` esa course, biriktirilgan
+  teacher, room, hafta kuni, mahalliy boshlanish/tugash va `valid_from` /
+  ixtiyoriy `valid_to` sanalarini saqlaydi. Weekly slot takroriy qoidadir;
+  u aniq sana uchun session, dars yoki davomat yozuvi emas.
+- Vaqtlar `TimeField` devor-soati qiymatlari (`Asia/Tashkent`) bo‘lib, UTC
+  datetime sifatida saqlanmaydi. Kelajakda aniq sana uchun maktab timezone bilan
+  birlashtirib UTC-aware datetime hosil qilinadi.
+- Room va weekly slot o‘qish authenticated foydalanuvchiga, create/update esa
+  `manage_academics`ga beriladi. Oddiy teacher/pupil write qila olmaydi.
+  Vaqt/sana tartibi DB constraint bilan himoyalangan; teacher-role va
+  `TeachingAssignment` bog‘lanishi model/API validatsiyasida tekshiriladi.
+- P050: singleton `TimetableLock` row transaction ichida qulflanadi; slot
+  create/update shu lock ostida hafta kuni, inclusive sana kesishmasi va vaqt
+  oralig‘i kesishmasini tekshiradi. Teacher, sinf va xona alohida resurslardir;
+  bir xil endpoint orqali barcha jadval yozuvlari lock’dan o‘tishi shart.
+  Yarim ochiq vaqt intervallari sababli tutash slotlar to‘qnashmaydi. Solver,
+  exclusion extension, schedule exception va session materialization scope’dan
+  tashqarida.
+
+## P051 dars sessioni
+
+- `LessonSession` — haftalik qoidadagi slotning aniq mahalliy sanada
+  ro‘yobga chiqqan bitta nusxasi. `(slot, local_date)` unique constraint
+  materializatsiyani idempotent qiladi. Manual `materialize_lessons`
+  command/service ko‘pi bilan 31 kun uchun dars yaratadi; Celery avtomatik
+  generatori yo‘q.
+- Sana `Asia/Tashkent` bo‘yicha talqin qilinadi, boshlanish/tugash mahalliy
+  vaqti UTC-aware `DateTimeField`ga aylantiriladi. Read API
+  `GET /api/v1/schedule/?from=&to=` 31 kalendar kun bilan cheklangan. Teacher
+  faqat o‘z sloti va dars sanasida amaldagi assignment’i bor kurs sessionini;
+  pupil esa dars sanasida amaldagi enrollment’i bor kurs sessionini ko‘radi.
+- Jadval istisnolari, davomat, frontend calendar va boshqa avtomatik
+  materializatsiya scheduler’i bu scope’ga kirmaydi.
+
+## P052 bitta occurrence istisnosi
+
+- Haftalik `WeeklySlot` recurrence qoidasi bo‘lib qoladi; move/cancel faqat
+  alohida `LessonSession` occurrence’iga ta’sir qiladi. Bekor qilingan session
+  qatori o‘chirilmay, `cancelled` status va append-only `ScheduleException`
+  audit bilan saqlanadi.
+- Operator (`manage_academics`) session exception endpointini ishlatadi.
+  Ko‘chirish P050 timetable lock ostida destination date’ni haftalik slotlar
+  va materializatsiya qilingan sessionlar bilan teacher, xona, sinf/time
+  overlap bo‘yicha tekshiradi; konflikt service transaction’ni to‘liq bekor
+  qiladi.
+- O‘rinbosar teacher ko‘chirish sanasida ayni course’ga `TeachingAssignment`
+  bilan biriktirilgan bo‘lishi shart. P052 scope’ida attendance modeli
+  qo‘shilmagan; session o‘chirilmaydi.
+
+## P053 dars davomatini belgilash
+
+- `Attendance` `(session, pupil)` bo‘yicha unique; holatlar `present`, `absent`,
+  `late`, `excused` va `unmarked`. Bulk `PUT /api/v1/sessions/<id>/attendance/`
+  faqat sessionning amaldagi, tegishli sanada kursga biriktirilgan teacher’i
+  uchun ochiq; bekor qilingan sessionga yozish rad etiladi.
+- Pupil sessionning amaldagi `scheduled_date` sanasida kursga enrollment’da
+  bo‘lishi kerak. Takroriy pupil yoki yaroqsiz qator butun batch’ni rollback
+  qiladi; yuborilmagan pupil o‘zgarmaydi va avtomatik `absent` belgilanmaydi.
+  Holat o‘zgartirilganda sabab majburiy, `AttendanceAudit` esa eski/yangi
+  holat, sabab va actor’ni append-only saqlaydi. O‘zgarmagan holat audit
+  yaratmaydi.
+- Davomat statistikasi, turniket, avtomatik `present`, bayram taqvimi va
+  darsdan tashqari davomat jarayonlari scope’dan tashqarida.
+
+## P054 davomatni o‘qish va tuzatish tarixi
+
+- `GET /api/v1/me/attendance/?from=&to=` faqat pupilning o‘z course enrollment’i
+  amal qilgan, bekor qilinmagan sessionlarini qaytaradi; teacher
+  `GET /api/v1/sessions/<id>/attendance/` orqali faqat o‘z sessionining
+  enrollment rosteri va davomatini ko‘radi. Sana oynasi 31 kungacha.
+- Summary joriy holatga asoslanadi: eligible session/pupil maxraj, `unmarked`
+  “kelmagan” ham, “kelgan” ham emas; attendance qatori yo‘qligi ham
+  `unmarked` ko‘rinadi. Cancelled session maxrajdan chiqariladi. Tuzatilgan
+  holat joriy summary’da ishlatiladi, audit esa eski/yangi qiymat, sabab,
+  actor va vaqt bilan saqlanadi.
+- Official attendance rating, ota-ona notification va export builder
+  scope’dan tashqarida.
+
 ## Loyiha chegarasi
 
 - **Maqsad:** bitta maktabning o‘quv jarayoniga mo‘ljallangan LMS backendini bosqichma-

@@ -16,6 +16,8 @@ oynasi orqali amalga oshiriladi. Login, logout, token refresh va account create
 uchun CSRF token talab qilinmaydi. Django admin/session hamda
 `CsrfViewMiddleware` himoyasi saqlanadi.
 
+Access va refresh tokenlar 1 kun amal qiladi.
+
 1. `POST /api/v1/auth/login/`ni ochib, username va parolni JSON body’da yuboring:
 
    ```json

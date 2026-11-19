@@ -117,6 +117,8 @@ API JWT Bearer autentifikatsiyasidan foydalanadi. Login, logout va account
 create uchun CSRF token kerak emas. Django admin/session uchun CSRF middleware
 saqlanadi; bu API’da SessionAuthentication ishlatilmaydi.
 
+Access va refresh tokenlar 1 kun amal qiladi.
+
 1. `POST /api/v1/auth/login/`ni ochib username va parolni yuboring:
 
    ```json

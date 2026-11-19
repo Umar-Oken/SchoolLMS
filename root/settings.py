@@ -73,6 +73,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'accounts.apps.AccountsConfig',
     'academics.apps.AcademicsConfig',
+    'scheduling.apps.SchedulingConfig',
     'learning.apps.LearningConfig',
     'assignments.apps.AssignmentsConfig',
     'files.apps.FilesConfig',
@@ -129,7 +130,7 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=5),
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=1),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
@@ -151,6 +152,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Academics', 'description': 'Kurslarni ko‘rish.'},
         {'name': 'Learning', 'description': 'Topic yaratish, o‘qish va boshqarish.'},
         {'name': 'Files', 'description': 'Private fayllarni yuklash.'},
+        {'name': 'Scheduling', 'description': 'Dars jadvali va davomat.'},
     ],
     'REDOC_DIST': 'SIDECAR',
     'SWAGGER_UI_SETTINGS': {
