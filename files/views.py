@@ -1,7 +1,9 @@
+import hashlib
 import uuid
 
 from django.core.files.storage import storages
 from django.db import DatabaseError
+from django.db import transaction
 from django.http import FileResponse
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
@@ -19,6 +21,7 @@ from files.serializers import (
 )
 from files.selectors import attachment_download_scope
 from files.upload_handlers import AttachmentSizeLimitUploadHandler
+from outbox.services import enqueue_outbox_event
 from accounts.permissions import MustChangePasswordPermission
 from root.openapi import common_error_responses, error_response
 
@@ -59,11 +62,42 @@ class AttachmentUploadView(GenericAPIView):
 
         uploaded_file = serializer.validated_data['file']
         detected_mime = serializer.validated_data['detected_mime']
-        key = uuid.uuid4()
-        storage = storages['private']
-        stored_key = storage.save(str(key), uploaded_file)
+        uploaded_file.seek(0)
+        digest = hashlib.sha256()
+        for chunk in uploaded_file.chunks():
+            digest.update(chunk)
+        content_sha256 = digest.hexdigest()
+        uploaded_file.seek(0)
+# Deduplicate: reuse existing clean attachment with same SHA256 if available
+storage = storages['private']
+existing_clean = Attachment.objects.filter(
+    content_sha256=content_sha256,
+    scan_status=Attachment.ScanStatus.CLEAN,
+).first()
+if existing_clean:
+    # Reuse the stored file pointer; no new storage write needed
+    key = existing_clean.key
+    stored_key = None
+else:
+    key = uuid.uuid4()
+    stored_key = storage.save(str(key), uploaded_file)
 
-        try:
+try:
+    with transaction.atomic():
+        if existing_clean:
+            # Create attachment record pointing to existing clean file
+            attachment = Attachment.objects.create(
+                owner=request.user,
+                key=key,
+                original_name=uploaded_file.name,
+                size=uploaded_file.size,
+                detected_mime=detected_mime,
+                scan_status=Attachment.ScanStatus.CLEAN,
+                content_sha256=content_sha256,
+                scanned_sha256=content_sha256,
+                scanned_at=existing_clean.scanned_at,
+            )
+        else:
             attachment = Attachment.objects.create(
                 owner=request.user,
                 key=key,
@@ -71,8 +105,17 @@ class AttachmentUploadView(GenericAPIView):
                 size=uploaded_file.size,
                 detected_mime=detected_mime,
                 scan_status=Attachment.ScanStatus.PENDING_SCAN,
+                content_sha256=content_sha256,
             )
-        except DatabaseError:
+            enqueue_outbox_event(
+                kind='attachment.scan_requested',
+                payload={
+                    'attachment_id': attachment.pk,
+                    'sha256': content_sha256,
+                },
+                dedup_key=f'attachment:{attachment.pk}:scan:{content_sha256}',
+            )
+        except (DatabaseError, ValueError):
             storage.delete(stored_key)
             raise
 

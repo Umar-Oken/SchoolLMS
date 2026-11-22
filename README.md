@@ -43,19 +43,104 @@ orqali bering. P081’da Gunicorn production dependency sifatida o‘rnatilib,
 yoki hosting process manager orqali boshqaring. Development serverini
 production’da ishlatmang.
 
-P055’da Redis va Celery integratsiyasi sozlangandan keyin Redis’ni lokal servis
-sifatida yoki mavjud server orqali ishga tushiring; ulanish manzilini
-`REDIS_URL` environment variable orqali bering. Worker va Beat alohida
-operatsion tizim processlari bo‘lib, har biri uchun quyidagi komandani alohida
-ishga tushiring:
+## Redis va Celery lokal ishga tushirish
+
+Redis — tezkor key/value serveri va Celery uchun broker; Django cache bilan
+bir xil narsa emas. Django/CLI task producer vazifani `default`, `scans` yoki
+`ai` queue’ga yuboradi; Celery worker queue’dan olib bajaradi. Beat task
+bajarmaydi, faqat jadval asosida queue’ga yuboradi. Hozir Beat har 30 soniyada
+pending outbox event dispatcher’ini, har 5 daqiqada esa yaqin deadline
+reminder taskini ishga tushiradi.
+
+Docker o‘rnatilgan lokal muhitda Redis’ni boshlash:
 
 ```sh
-celery -A root worker -l info
-celery -A root beat -l info
+docker run --name schoollms-redis -p 127.0.0.1:6379:6379 -d redis:7-alpine
+redis-cli -h 127.0.0.1 ping
 ```
 
-Beat’ning faqat bitta nusxasini ishga tushiring. Worker va Beat’ni systemd,
-Supervisor yoki hosting process manager orqali boshqarish mumkin.
+Javob `PONG` bo‘lishi kerak. Redis OS service sifatida allaqachon o‘rnatilgan
+bo‘lsa, uni distro service manager orqali ishga tushiring, masalan:
+
+```sh
+sudo systemctl enable --now redis-server
+redis-cli -h 127.0.0.1 ping
+```
+
+`.env.example`dagi `CELERY_BROKER_URL` va `CELERY_RESULT_BACKEND` broker va
+vaqtinchalik task natijalarini alohida Redis logical DB (`/0`, `/1`)ga
+yo‘naltiradi; kerak bo‘lsa bu qiymatlarni `.env`da yoki process
+environment’da almashtiring. `root/celery.py` Celery ilovasini Django
+sozlamalari bilan tuzadi va o‘rnatilgan Django ilovalaridagi `tasks.py`
+fayllarini avtomatik topadi; `root.tasks` diagnostic task alohida import
+qilingan, `outbox.tasks` va `notifications.tasks` esa app autodiscovery orqali
+topiladi. App/worker
+tekshiruvi uchun `.venv/bin/celery -A root report` va
+`.venv/bin/celery -A root inspect registered` buyruqlaridan foydalaning.
+
+Quyidagi buyruqlarni alohida terminal/processlarda bajaring: worker, Beat va
+Django serveri alohida jarayonlardir.
+
+```sh
+.venv/bin/celery -A root worker --loglevel=INFO --queues=default,scans,ai
+.venv/bin/celery -A root beat --loglevel=INFO \
+  --schedule=/tmp/schoollms-celerybeat-schedule
+```
+
+Worker ishlashini xavfsiz diagnostic task bilan tekshiring:
+
+```sh
+.venv/bin/python manage.py shell -c \
+  "from root.tasks import diagnostic_ping; result = diagnostic_ping.delay(); print(result.get(timeout=15))"
+```
+
+Kutiladigan natija: `celery-worker-ok`. Bu CLI tekshiruvi natijani kutadi;
+HTTP so‘rov yoki asosiy veb amal `delay()`dan keyin natijani sinxron
+kutmasligi kerak. Outbox event biznes transaction’i ichida PostgreSQL’da
+saqlanadi; commit’dan keyingi `on_commit` callback faqat dispatcher’ni
+uyg‘otadi. Broker uzilsa event `deferred` bo‘lib qoladi, yagona Beat har
+30 soniyada pending/deferred va lease’i tugagan sent eventlarni qayta dispatch
+qiladi. `sent` broker event ID’ni qabul qilganini, `processed` consumer effect’i
+DB’da yakunlanganini bildiradi. `test.effect` handler unique effect receipt
+ishlatadi; `announcement.published` handler kursning faol pupil va teacherlariga
+in-app Notification yaratadi. `(recipient,event_key)` unique cheklovi duplicate
+delivery’da takror notification’ni to‘xtatadi. Push/WebSocket, email/SMS,
+scan va AI handler hozir qo‘shilmagan.
+
+Deadline reminder taski `due_at` keyingi 24 soat ichida bo‘lgan published
+assignmentlarni har 5 daqiqada tekshiradi. `Assignment.deadline_version`
+deadline o‘zgarganda oshadi; oldingi versiyadagi reminderlar bekor qilinadi.
+Nazoratli o‘zgartirish uchun barcha vaqtlar timezone-aware ISO 8601 formatida
+beriladi:
+
+```sh
+.venv/bin/python manage.py change_assignment_deadlines \
+  --assignment-id 42 \
+  --available-at 2026-11-20T09:00:00Z \
+  --due-at 2026-11-22T09:00:00Z \
+  --closes-at 2026-11-23T09:00:00Z
+```
+
+Celery yetkazishi kamida bir marta bo‘lishi mumkin; kelajakdagi consumerlar ham
+biznes effect’ni unique DB kaliti yoki boshqa idempotency guard bilan
+himoyalashi shart. `acks_late` va worker to‘xtagan paytdagi qayta navbatga
+qo‘yish sozlamalari task takror bajarilishiga olib kelishi mumkin; aynan bir
+marta bajarilishini kafolatlamaydi.
+
+Production’da broker va cache’ni alohida Redis instance/service (alohida
+ACL credential, network policy va TLS)da joylashtiring; application cache’ni
+`CELERY_BROKER_URL` yoki result backend bilan birlashtirmang. Default, scans
+va AI worker’larni alohida process/resursda ishlatish mumkin, ammo Beat
+scheduler deployment’da **faqat bitta** bo‘lsin. Bir nechta Beat schedule
+task’larni takroran navbatga qo‘yadi. Redis broker/result backend biznes
+ma’lumotlarining asosiy manbai emas va doimiy saqlash uchun ishlatilmaydi.
+Worker hamda Beat’ni systemd, Supervisor yoki hosting process manager
+boshqarsin.
+
+Manbalar: [Celery tasks](https://docs.celeryq.dev/en/stable/userguide/tasks.html),
+[Celery Beat](https://docs.celeryq.dev/en/stable/userguide/periodic-tasks.html),
+[Redis concepts](https://redis.io/docs/latest/develop/),
+[Django transactions](https://docs.djangoproject.com/en/5.2/topics/db/transactions/).
 
 ## P006: testlar va OpenAPI
 

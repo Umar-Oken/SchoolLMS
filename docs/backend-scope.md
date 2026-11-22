@@ -265,6 +265,42 @@
 - Official attendance rating, ota-ona notification va export builder
   scope’dan tashqarida.
 
+## P055–P059 fon ishi, outbox va in-app bildirishnomalar
+
+- Redis Celery broker/result backend sifatida ishlaydi; cache va biznes
+  ma’lumotlari uchun asosiy saqlash joyi emas. Celery producer queue’ga,
+  worker esa taskni bajaradi; yagona Beat periodic dispatcher’ni uyg‘otadi.
+- `OutboxEvent` biznes DB transaction’i bilan birga yoziladi; `on_commit`
+  faqat dispatcher’ni uyg‘otadi. Dispatcher pending/deferred va muddati
+  o‘tgan `sent` eventlarni qayta yuboradi; broker uzilishi `deferred` holat
+  va retry vaqtini event bilan birga DB’da saqlaydi. `sent` broker event ID’ni
+  qabul qilganini, `processed` esa consumer effect transaction bilan
+  yakunlanganini anglatadi.
+- Dedup key eventni bir marta yaratadi; consumer effect receipt unique
+  dedup key bilan takror delivery’ni bitta effect bilan cheklaydi. Kelajakdagi
+  consumerlar o‘z biznes effect’lari uchun ham unique/idempotency guard
+  qo‘llashi shart. Ro‘yxatdan o‘tmagan event turi `failed` holatiga va aniq
+  xato sababiga o‘tadi.
+- `Announcement` faqat teacherning faol biriktirilgan kursida yaratiladi;
+  pupil o‘z kursidagi published e’lonni ko‘radi. Publish va outbox event bir
+  transaction’da yoziladi; event `announcement:<id>:published` dedup kalitiga
+  ega. `Notification` consumer event kursining hozirgi faol pupil
+  enrollment’lari va teacher assignment’lariga fan-out qiladi. `(recipient,
+  event_key)` unique cheklovi takror delivery’dan himoya qiladi; `read_at=null`
+  unread holat, `read_at` to‘ldirilishi esa o‘qilgan holatdir. List faqat
+  joriy foydalanuvchiga paginated qaytadi, read amali ham recipient bilan
+  cheklanadi.
+- P059’da Beat har 5 daqiqada published assignment `due_at` keyingi 24 soat
+  ichida bo‘lsa bitta `assignment.due_soon` in-app reminder yaratadi.
+  `(recipient,assignment,deadline_version,kind)` unique cheklovi tick takrorida
+  dedup qiladi. Qator yaratilishidan oldin assignment versiyasi, holati va
+  pupilning bugungi faol enrollment’i tekshiriladi. Deadline service/command
+  row lock bilan uchta vaqt chegarasini atomar almashtiradi, o‘zgarish bo‘lsa
+  versiyani oshiradi va oldingi versiya notification’larini bekor qiladi;
+  alohida deadline API yoki audit trail yo‘q.
+- Push/WebSocket, email/SMS, boshqa reminder turlari, antivirus scan va AI
+  task handlerlari ushbu bosqichlarda qo‘shilmagan.
+
 ## Loyiha chegarasi
 
 - **Maqsad:** bitta maktabning o‘quv jarayoniga mo‘ljallangan LMS backendini bosqichma-

@@ -29,6 +29,7 @@ class Assignment(models.Model):
     )
     published_at = models.DateTimeField(null=True, blank=True)
     rubric_version = models.PositiveSmallIntegerField(default=0)
+    deadline_version = models.PositiveIntegerField(default=1)
 
     class Meta:
         constraints = [
@@ -47,6 +48,10 @@ class Assignment(models.Model):
             models.CheckConstraint(
                 condition=Q(max_attempts__gt=0),
                 name='assignments_max_attempts_positive',
+            ),
+            models.CheckConstraint(
+                condition=Q(deadline_version__gte=1),
+                name='assignments_deadline_version_positive',
             ),
         ]
         ordering = ('available_at', 'pk')

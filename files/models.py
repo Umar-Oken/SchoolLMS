@@ -9,7 +9,8 @@ class Attachment(models.Model):
     class ScanStatus(models.TextChoices):
         PENDING_SCAN = 'pending_scan', 'Pending scan'
         CLEAN = 'clean', 'Clean'
-        REJECTED = 'rejected', 'Rejected'
+        INFECTED = 'infected', 'Infected'
+        FAILED = 'failed', 'Failed'
 
     owner = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -25,12 +26,21 @@ class Attachment(models.Model):
         choices=ScanStatus.choices,
         default=ScanStatus.PENDING_SCAN,
     )
+    content_sha256 = models.CharField(max_length=64, blank=True, default='')
+    scanned_sha256 = models.CharField(max_length=64, blank=True, default='')
+    scanned_at = models.DateTimeField(blank=True, null=True)
+    scan_error = models.CharField(max_length=255, blank=True, default='')
 
     class Meta:
         constraints = [
             models.CheckConstraint(
                 condition=Q(
-                    scan_status__in=['pending_scan', 'clean', 'rejected']
+                    scan_status__in=[
+                        'pending_scan',
+                        'clean',
+                        'infected',
+                        'failed',
+                    ]
                 ),
                 name='files_attachment_scan_status_valid',
             ),

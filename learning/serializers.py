@@ -10,7 +10,7 @@ from academics.models import CourseOffering, Term
 from academics.services import ensure_term_open
 from academics.views import teacher_course_scope
 from files.models import Attachment
-from learning.models import Completion, Resource, Topic
+from learning.models import Announcement, Completion, Resource, Topic
 
 
 class TopicCreateSerializer(serializers.ModelSerializer):
@@ -159,6 +159,60 @@ class CompletionMarkSerializer(serializers.Serializer):
                 for name in data.keys()
             })
         return {}
+
+
+class AnnouncementCreateSerializer(serializers.ModelSerializer):
+    course = serializers.PrimaryKeyRelatedField(
+        queryset=CourseOffering.objects.all(),
+        required=False,
+    )
+
+    class Meta:
+        model = Announcement
+        fields = ('id', 'course', 'title', 'body', 'state', 'published_at')
+        read_only_fields = ('id', 'state', 'published_at')
+
+    def to_internal_value(self, data):
+        allowed_fields = {'course', 'title', 'body'}
+        if hasattr(data, 'keys'):
+            extra_fields = set(data.keys()) - allowed_fields
+            if extra_fields:
+                raise serializers.ValidationError({
+                    name: 'Bu maydon qabul qilinmaydi.'
+                    for name in extra_fields
+                })
+        return super().to_internal_value(data)
+
+    def validate_course(self, course):
+        user = self.context['request'].user
+        if not teacher_course_scope(user, active_only=True).filter(
+            pk=course.pk,
+        ).exists():
+            raise NotFound()
+        return course
+
+    def validate(self, attrs):
+        if not attrs.get('title', '').strip():
+            raise serializers.ValidationError({
+                'title': 'E’lon sarlavhasi bo‘sh bo‘lmasligi kerak.',
+            })
+        return attrs
+
+
+class AnnouncementReadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Announcement
+        fields = (
+            'id',
+            'course',
+            'title',
+            'body',
+            'state',
+            'published_at',
+            'created_at',
+            'updated_at',
+        )
+        read_only_fields = fields
 
 
 def validate_clean_pdf_attachment(attachment, user):

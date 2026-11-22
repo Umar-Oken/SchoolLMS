@@ -16,6 +16,8 @@ from pathlib import Path
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management.utils import get_random_secret_key
 from dotenv import load_dotenv
+from kombu import Queue
+from files.scanners import validate_scanner_configuration
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -61,6 +63,26 @@ if not DEBUG and not ALLOWED_HOSTS:
         "DJANGO_ALLOWED_HOSTS must be set when DEBUG is false."
     )
 
+ANTIVIRUS_SCANNER_BACKEND = os.environ.get(
+    'ANTIVIRUS_SCANNER_BACKEND',
+    'clamav',
+).strip().lower()
+validate_scanner_configuration(
+    app_env=APP_ENV,
+    backend=ANTIVIRUS_SCANNER_BACKEND,
+)
+ANTIVIRUS_CLAMAV_HOST = os.environ.get('ANTIVIRUS_CLAMAV_HOST', '127.0.0.1')
+ANTIVIRUS_CLAMAV_PORT = int(os.environ.get('ANTIVIRUS_CLAMAV_PORT', '3310'))
+ANTIVIRUS_SCAN_TIMEOUT = float(
+    os.environ.get('ANTIVIRUS_SCAN_TIMEOUT', '15')
+)
+if not 1 <= ANTIVIRUS_CLAMAV_PORT <= 65535:
+    raise ImproperlyConfigured(
+        'ANTIVIRUS_CLAMAV_PORT must be between 1 and 65535.'
+    )
+if ANTIVIRUS_SCAN_TIMEOUT <= 0:
+    raise ImproperlyConfigured('ANTIVIRUS_SCAN_TIMEOUT must be positive.')
+
 
 # Application definition
 
@@ -74,6 +96,8 @@ INSTALLED_APPS = [
     'accounts.apps.AccountsConfig',
     'academics.apps.AcademicsConfig',
     'scheduling.apps.SchedulingConfig',
+    'outbox.apps.OutboxConfig',
+    'notifications.apps.NotificationsConfig',
     'learning.apps.LearningConfig',
     'assignments.apps.AssignmentsConfig',
     'files.apps.FilesConfig',
@@ -151,6 +175,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Accounts', 'description': 'Account boshqaruvi.'},
         {'name': 'Academics', 'description': 'Kurslarni ko‘rish.'},
         {'name': 'Learning', 'description': 'Topic yaratish, o‘qish va boshqarish.'},
+        {'name': 'Notifications', 'description': 'In-app bildirishnomalar.'},
         {'name': 'Files', 'description': 'Private fayllarni yuklash.'},
         {'name': 'Scheduling', 'description': 'Dars jadvali va davomat.'},
     ],
@@ -215,6 +240,49 @@ TIME_ZONE = 'UTC'
 USE_I18N = True
 
 USE_TZ = True
+
+CELERY_BROKER_URL = os.environ.get(
+    'CELERY_BROKER_URL',
+    'redis://127.0.0.1:6379/0',
+)
+CELERY_RESULT_BACKEND = os.environ.get(
+    'CELERY_RESULT_BACKEND',
+    'redis://127.0.0.1:6379/1',
+)
+CELERY_TASK_DEFAULT_QUEUE = 'default'
+CELERY_TASK_QUEUES = (
+    Queue('default', routing_key='default'),
+    Queue('scans', routing_key='scans'),
+    Queue('ai', routing_key='ai'),
+)
+CELERY_TASK_ROUTES = {
+    'root.tasks.diagnostic_ping': {'queue': 'default'},
+    'files.tasks.scan_attachment': {'queue': 'scans'},
+    'scans.*': {'queue': 'scans'},
+    'ai.*': {'queue': 'ai'},
+}
+CELERY_IMPORTS = ('root.tasks',)
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_ACCEPT_CONTENT = ('json',)
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_RESULT_EXPIRES = 3600
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_BROKER_TRANSPORT_OPTIONS = {'visibility_timeout': 3600}
+CELERY_RESULT_BACKEND_TRANSPORT_OPTIONS = {'visibility_timeout': 3600}
+CELERY_BEAT_SCHEDULE = {
+    'dispatch-pending-outbox-events': {
+        'task': 'outbox.tasks.dispatch_pending_outbox_events',
+        'schedule': 30.0,
+        'options': {'queue': 'default'},
+    },
+    'create-assignment-deadline-reminders': {
+        'task': 'notifications.tasks.create_deadline_reminders',
+        'schedule': 300.0,
+        'options': {'queue': 'default'},
+    },
+}
 
 
 # Static files (CSS, JavaScript, Images)

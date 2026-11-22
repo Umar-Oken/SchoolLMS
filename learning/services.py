@@ -7,7 +7,8 @@ from accounts.models import User
 from academics.services import ensure_term_open
 from academics.views import teacher_course_scope
 from files.models import Attachment
-from learning.models import Resource, Topic
+from learning.models import Announcement, Resource, Topic
+from outbox.services import enqueue_outbox_event
 
 
 @transaction.atomic
@@ -115,3 +116,56 @@ def publish_resource(resource_id, *, actor):
     resource.state = Resource.State.PUBLISHED
     resource.save(update_fields=['state'])
     return resource
+
+
+@transaction.atomic
+def publish_announcement(announcement_id, *, actor):
+    if not isinstance(actor, User) or actor.role != User.Role.TEACHER:
+        raise NotFound()
+
+    announcement = (
+        Announcement.objects.select_for_update()
+        .select_related('course')
+        .filter(
+            pk=announcement_id,
+            course_id__in=teacher_course_scope(
+                actor,
+                active_only=True,
+            ).values('pk'),
+        )
+        .first()
+    )
+    if announcement is None:
+        raise NotFound()
+
+    if announcement.state == Announcement.State.PUBLISHED:
+        if announcement.published_at is None:
+            raise ValidationError({
+                'published_at': 'Published announcement must have a publication time.',
+            })
+        return announcement
+    if announcement.state != Announcement.State.DRAFT:
+        raise ValidationError({
+            'state': 'Faqat draft e’lon nashr qilinadi.',
+        })
+    if not announcement.title.strip():
+        raise ValidationError({
+            'title': 'E’lon sarlavhasi bo‘sh bo‘lmasligi kerak.',
+        })
+
+    published_at = timezone.now()
+    announcement.state = Announcement.State.PUBLISHED
+    announcement.published_at = published_at
+    announcement.save(update_fields=('state', 'published_at', 'updated_at'))
+
+    enqueue_outbox_event(
+        kind='announcement.published',
+        payload={
+            'announcement_id': announcement.pk,
+            'course_id': announcement.course_id,
+            'title': announcement.title,
+            'published_at': published_at.isoformat(),
+        },
+        dedup_key=f'announcement:{announcement.pk}:published',
+    )
+    return announcement

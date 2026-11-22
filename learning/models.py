@@ -147,3 +147,31 @@ class Completion(models.Model):
             ),
         ]
         ordering = ('completed_at', 'pk')
+
+
+class Announcement(models.Model):
+    class State(models.TextChoices):
+        DRAFT = 'draft', 'Draft'
+        PUBLISHED = 'published', 'Published'
+
+    course = models.ForeignKey(
+        'academics.CourseOffering',
+        on_delete=models.PROTECT,
+        related_name='announcements',
+    )
+    title = models.CharField(max_length=200)
+    body = models.TextField(blank=True, default='')
+    state = models.CharField(
+        max_length=10,
+        choices=State.choices,
+        default=State.DRAFT,
+    )
+    published_at = models.DateTimeField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ('-created_at', 'pk')
+
+    def __str__(self):
+        return f'{self.course}: {self.title}'

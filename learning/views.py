@@ -21,8 +21,10 @@ from academics.models import CourseOffering
 from academics.services import ensure_term_open
 from academics.views import pupil_course_scope, teacher_course_scope
 from files.models import Attachment
-from learning.models import Completion, Resource, Topic
+from learning.models import Announcement, Completion, Resource, Topic
 from learning.serializers import (
+    AnnouncementCreateSerializer,
+    AnnouncementReadSerializer,
     CompletionMarkSerializer,
     CompletionReadSerializer,
     ResourceCreateSerializer,
@@ -33,8 +35,130 @@ from learning.serializers import (
     TopicUpdateSerializer,
     validate_clean_pdf_attachment,
 )
-from learning.services import publish_resource, publish_topic
+from learning.services import (
+    publish_announcement,
+    publish_resource,
+    publish_topic,
+)
 from root.openapi import common_error_responses
+
+
+class IsAnnouncementWriterOrReadOnly(BasePermission):
+    def has_permission(self, request, view):
+        return (
+            request.method in ('GET', 'HEAD', 'OPTIONS')
+            or getattr(request.user, 'role', None) == User.Role.TEACHER
+        )
+
+
+def announcement_course_scope(user, *, write=False):
+    if not isinstance(user, User):
+        return CourseOffering.objects.none()
+    if user.role == User.Role.PUPIL:
+        if write:
+            return CourseOffering.objects.none()
+        return pupil_course_scope(user)
+    if user.role == User.Role.TEACHER:
+        return teacher_course_scope(user, active_only=write)
+    return CourseOffering.objects.none()
+
+
+class AnnouncementListCreateView(generics.ListCreateAPIView):
+    permission_classes = (
+        IsAuthenticated,
+        MustChangePasswordPermission,
+        IsAnnouncementWriterOrReadOnly,
+    )
+    serializer_class = AnnouncementReadSerializer
+
+    def get_course(self):
+        course_scope = announcement_course_scope(
+            self.request.user,
+            write=self.request.method == 'POST',
+        )
+        course_pk = self.kwargs.get('course_pk')
+        if course_pk is None:
+            return None
+        return get_object_or_404(
+            course_scope.filter(archived_at__isnull=True),
+            pk=course_pk,
+        )
+
+    def get_queryset(self):
+        courses = announcement_course_scope(self.request.user)
+        course_pk = self.kwargs.get('course_pk')
+        if course_pk is not None:
+            course = self.get_course()
+            courses = courses.filter(pk=course.pk)
+        queryset = Announcement.objects.filter(
+            course_id__in=courses.filter(archived_at__isnull=True).values('pk'),
+        ).select_related('course')
+        if self.request.user.role == User.Role.PUPIL:
+            queryset = queryset.filter(state=Announcement.State.PUBLISHED)
+        return queryset
+
+    def get_serializer_class(self):
+        if self.request.method == 'POST':
+            return AnnouncementCreateSerializer
+        return AnnouncementReadSerializer
+
+    def create(self, request, *args, **kwargs):
+        if request.user.role != User.Role.TEACHER:
+            raise PermissionDenied(
+                'E’lonni faqat teacher yarata oladi.'
+            )
+        return super().create(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        course = self.get_course()
+        if course is not None:
+            serializer.validated_data['course'] = course
+        elif 'course' not in serializer.validated_data:
+            raise NotFound()
+        serializer.save(
+            course=serializer.validated_data['course'],
+            state=Announcement.State.DRAFT,
+            published_at=None,
+        )
+
+
+class AnnouncementDetailView(generics.RetrieveAPIView):
+    permission_classes = (
+        IsAuthenticated,
+        MustChangePasswordPermission,
+    )
+    serializer_class = AnnouncementReadSerializer
+
+    def get_queryset(self):
+        courses = announcement_course_scope(self.request.user)
+        queryset = Announcement.objects.filter(
+            course_id__in=courses.filter(archived_at__isnull=True).values('pk'),
+        ).select_related('course')
+        if self.request.user.role == User.Role.PUPIL:
+            queryset = queryset.filter(state=Announcement.State.PUBLISHED)
+        return queryset
+
+
+class AnnouncementPublishView(generics.GenericAPIView):
+    permission_classes = (
+        IsAuthenticated,
+        MustChangePasswordPermission,
+    )
+    serializer_class = AnnouncementReadSerializer
+
+    def post(self, request, *args, **kwargs):
+        if request.user.role != User.Role.TEACHER:
+            raise PermissionDenied(
+                'E’lonni faqat teacher nashr qilishi mumkin.'
+            )
+        announcement = publish_announcement(
+            kwargs['pk'],
+            actor=request.user,
+        )
+        return Response(
+            AnnouncementReadSerializer(announcement).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class IsTopicWriteTeacher(BasePermission):

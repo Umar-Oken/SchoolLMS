@@ -785,7 +785,21 @@ Assignment row lock ostida tekshiriladi va `state`, `published_at`,
 `rubric_version=1` bitta transaction’da saqlanadi. Takroriy publish mavjud
 `published_at`/version’ni o‘zgartirmaydi va yangi qator yaratmaydi. Published
 assignment uchun oddiy update endpointi yo‘q, rubric replacement ham yopiq.
-Notification bu bosqichda yuborilmaydi.
+Assignment publish event notification yubormaydi. Deadline reminder alohida
+Celery task’i orqali 24 soatlik oynaga kirganda yaratiladi.
+
+Deadline’larni nazoratli almashtirish uchun API yo‘q. Operator service/command
+orqali timezone-aware `available_at`, `due_at`, `closes_at` qiymatlarini birga
+almashtiradi; haqiqiy o‘zgarish `deadline_version`ni oshiradi va oldingi
+versiyadagi reminderlarni bekor qiladi:
+
+```bash
+.venv/bin/python manage.py change_assignment_deadlines \
+  --assignment-id 42 \
+  --available-at 2026-11-20T09:00:00Z \
+  --due-at 2026-11-22T09:00:00Z \
+  --closes-at 2026-11-23T09:00:00Z
+```
 
 Rubric `PUT` replacement hisoblanadi, PATCH emas. Har bir criterion va level’da
 `id` bo‘lmasa yangi child yaratiladi; mavjud child’ni o‘zgartirish uchun uning
@@ -861,6 +875,34 @@ curl http://127.0.0.1:8000/api/v1/assignments/1/ \
 curl -X POST http://127.0.0.1:8000/api/v1/assignments/1/publish/ \
   -H "Authorization: ******"
 ```
+
+### Kurs e’lonlari
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `GET /api/v1/courses/<course_id>/announcements/` | ******; teacher biriktirilgan kursning draft/published e’lonini, pupil o‘z kursidagi published e’lonni ko‘radi | `200` — e’lonlar ro‘yxati | Begona/bog‘lanmagan kurs `404` |
+| `POST /api/v1/courses/<course_id>/announcements/` yoki `POST /api/v1/announcements/` | Faol assignment’li teacher; global create’da `course`; nested create’da body faqat `title`, `body` | `201` — `state=draft`, `published_at=null` | Pupil `403`; begona yoki arxivlangan course `404`; bo‘sh title `400` |
+| `GET /api/v1/announcements/<id>/` | Teacher assigned course, pupil published e’lon va o‘z course’i | `200` — e’lon | Begona course/draft pupil `404` |
+| `POST /api/v1/announcements/<id>/publish/` | Faol assignment’li teacher; body kerak emas | `200` — `state=published` | Pupil `403`; begona/arxivlangan course `404`; bo‘sh title `400` |
+
+Publish e’lon holatini va `announcement.published` outbox event’ini bitta
+transaction’da yozadi. Stable `announcement:<id>:published` dedup kaliti takroriy
+publish’da ikkinchi event yaratmaydi. Bu bosqichda notification delivery
+handler ayni kursning amaldagi recipientlariga in-app bildirishnoma yaratadi.
+
+### In-app bildirishnomalar
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `GET /api/v1/notifications/?page=1&page_size=20` | ******; faqat joriy foydalanuvchi | `200` — `count`, `next`, `previous`, `results` bilan sahifalangan ro‘yxat | Noto‘g‘ri sahifa parametri `404` |
+| `PATCH /api/v1/notifications/<id>/read/` | ******; faqat notification egasi | `200` — `read_at` to‘ldirilgan notification | Boshqa foydalanuvchi yoki topilmagan ID `404` |
+
+Announcement publish event’i ayni kursning bugun faol enrollment’i bo‘lgan
+pupillari va faol assignment’i bo‘lgan teacherlariga fan-out qilinadi. Har
+notification `read_at=null` holatida unread; `read/` uni idempotent tarzda
+o‘qilgan deb belgilaydi. `(recipient,event_key)` unique cheklovi takroriy
+consumer delivery’da notification ko‘payishiga yo‘l qo‘ymaydi. Push/WebSocket,
+email/SMS va deadline reminder yo‘q.
 
 ### Mavzu resurslari
 

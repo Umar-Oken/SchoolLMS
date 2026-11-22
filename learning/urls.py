@@ -1,6 +1,9 @@
 from django.urls import path
 
 from learning.views import (
+    AnnouncementDetailView,
+    AnnouncementListCreateView,
+    AnnouncementPublishView,
     ResourceDetailView,
     ResourceListCreateView,
     ResourcePublishView,
@@ -9,6 +12,26 @@ from learning.views import (
 )
 
 urlpatterns = [
+    path(
+        'announcements/',
+        AnnouncementListCreateView.as_view(),
+        name='announcement-create',
+    ),
+    path(
+        'announcements/<int:pk>/',
+        AnnouncementDetailView.as_view(),
+        name='announcement-detail',
+    ),
+    path(
+        'announcements/<int:pk>/publish/',
+        AnnouncementPublishView.as_view(),
+        name='announcement-publish',
+    ),
+    path(
+        'courses/<int:course_pk>/announcements/',
+        AnnouncementListCreateView.as_view(),
+        name='course-announcement-list-create',
+    ),
     path(
         'courses/<int:course_pk>/topics/',
         TopicViewSet.as_view({'get': 'list'}),

@@ -25,7 +25,8 @@ from academics.models import (
 )
 from academics.services import close_teaching_assignment
 from files.models import Attachment
-from learning.models import Completion, Resource, Topic
+from learning.models import Announcement, Completion, Resource, Topic
+from outbox.models import OutboxEvent
 
 
 @pytest.fixture
@@ -1527,7 +1528,7 @@ def test_pupil_downloads_clean_file_only_through_published_resource_scope(
 @pytest.mark.django_db
 @pytest.mark.parametrize(
     'scan_status',
-    [Attachment.ScanStatus.PENDING_SCAN, Attachment.ScanStatus.REJECTED],
+    [Attachment.ScanStatus.PENDING_SCAN, Attachment.ScanStatus.INFECTED],
 )
 def test_attachment_owner_cannot_download_unclean_file(topic_api_data, scan_status):
     attachment = create_stored_attachment(
@@ -1574,3 +1575,92 @@ def test_attachment_download_requires_authentication():
     response = APIClient().get('/api/v1/attachments/1/download/')
 
     assert response.status_code == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.django_db(transaction=True)
+def test_announcement_create_publish_scope_and_single_outbox_event(
+    topic_api_data,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        'outbox.services.wake_event_dispatcher',
+        lambda event_id: None,
+    )
+    teacher = topic_api_data['teacher_a']
+    foreign_teacher = topic_api_data['teacher_b']
+    pupil = topic_api_data['pupil_a']
+    course = topic_api_data['course_a']
+    foreign_course = topic_api_data['course_b']
+
+    teacher_client = APIClient()
+    teacher_client.force_authenticate(user=teacher)
+    created = teacher_client.post(
+        f'/api/v1/courses/{course.pk}/announcements/',
+        {'title': 'Ertaga sinov', 'body': 'Sinov 10:00 da.'},
+        format='json',
+    )
+    assert created.status_code == status.HTTP_201_CREATED
+    assert created.data['state'] == Announcement.State.DRAFT
+    announcement_id = created.data['id']
+
+    foreign_create = foreign_teacher_client = APIClient()
+    foreign_teacher_client.force_authenticate(user=foreign_teacher)
+    foreign_create = foreign_teacher_client.post(
+        f'/api/v1/courses/{course.pk}/announcements/',
+        {'title': 'Begona', 'body': 'Rad qilinishi kerak.'},
+        format='json',
+    )
+    assert foreign_create.status_code == status.HTTP_404_NOT_FOUND
+
+    published = teacher_client.post(
+        f'/api/v1/announcements/{announcement_id}/publish/',
+        {},
+        format='json',
+    )
+    assert published.status_code == status.HTTP_200_OK
+    assert published.data['state'] == Announcement.State.PUBLISHED
+    repeated = teacher_client.post(
+        f'/api/v1/announcements/{announcement_id}/publish/',
+        {},
+        format='json',
+    )
+    assert repeated.status_code == status.HTTP_200_OK
+    assert OutboxEvent.objects.filter(
+        kind='announcement.published',
+        dedup_key=f'announcement:{announcement_id}:published',
+    ).count() == 1
+
+    pupil_client = APIClient()
+    pupil_client.force_authenticate(user=pupil)
+    pupil_detail = pupil_client.get(
+        f'/api/v1/announcements/{announcement_id}/'
+    )
+    assert pupil_detail.status_code == status.HTTP_200_OK
+
+    foreign_pupil = topic_api_data['pupil_b']
+    foreign_pupil_client = APIClient()
+    foreign_pupil_client.force_authenticate(user=foreign_pupil)
+    foreign_detail = foreign_pupil_client.get(
+        f'/api/v1/announcements/{announcement_id}/'
+    )
+    foreign_list = foreign_pupil_client.get(
+        f'/api/v1/courses/{course.pk}/announcements/'
+    )
+    assert foreign_detail.status_code == status.HTTP_404_NOT_FOUND
+    assert foreign_list.status_code == status.HTTP_404_NOT_FOUND
+
+    assert not foreign_course.announcements.filter(pk=announcement_id).exists()
+
+
+@pytest.mark.django_db
+def test_pupil_cannot_create_announcement(topic_api_data):
+    pupil_client = APIClient()
+    pupil_client.force_authenticate(user=topic_api_data['pupil_a'])
+
+    response = pupil_client.post(
+        f"/api/v1/courses/{topic_api_data['course_a'].pk}/announcements/",
+        {'title': 'Pupil e’lon', 'body': 'Taqiqlangan'},
+        format='json',
+    )
+
+    assert response.status_code == status.HTTP_403_FORBIDDEN

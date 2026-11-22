@@ -76,6 +76,59 @@ def submission_input_fingerprint(*, expected_version):
 
 
 @transaction.atomic
+def change_assignment_deadlines(
+    assignment_id,
+    *,
+    available_at,
+    due_at,
+    closes_at,
+):
+    assignment = (
+        Assignment.objects.select_for_update()
+        .filter(pk=assignment_id)
+        .first()
+    )
+    if assignment is None:
+        raise NotFound()
+    values = {
+        'available_at': available_at,
+        'due_at': due_at,
+        'closes_at': closes_at,
+    }
+    if any(not timezone.is_aware(value) for value in values.values()):
+        raise serializers.ValidationError(
+            'Deadline qiymatlari timezone-aware bo‘lishi kerak.'
+        )
+    if not available_at <= due_at <= closes_at:
+        raise serializers.ValidationError({
+            'deadlines': (
+                'Deadline tartibi available_at <= due_at <= closes_at bo‘lishi kerak.'
+            )
+        })
+
+    changed_fields = [
+        field for field, value in values.items()
+        if getattr(assignment, field) != value
+    ]
+    if not changed_fields:
+        return assignment
+
+    assignment.deadline_version += 1
+    for field in changed_fields:
+        setattr(assignment, field, values[field])
+    assignment.save(update_fields=(*changed_fields, 'deadline_version'))
+
+    from notifications.models import Notification
+
+    Notification.objects.filter(
+        assignment=assignment,
+        deadline_version__lt=assignment.deadline_version,
+        cancelled_at__isnull=True,
+    ).update(cancelled_at=timezone.now())
+    return assignment
+
+
+@transaction.atomic
 def publish_assignment(assignment_id):
     assignment = (
         Assignment.objects.select_for_update()
