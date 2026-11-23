@@ -68,55 +68,55 @@ class AttachmentUploadView(GenericAPIView):
             digest.update(chunk)
         content_sha256 = digest.hexdigest()
         uploaded_file.seek(0)
-# Deduplicate: reuse existing clean attachment with same SHA256 if available
-storage = storages['private']
-existing_clean = Attachment.objects.filter(
-    content_sha256=content_sha256,
-    scan_status=Attachment.ScanStatus.CLEAN,
-).first()
-if existing_clean:
-    # Reuse the stored file pointer; no new storage write needed
-    key = existing_clean.key
-    stored_key = None
-else:
-    key = uuid.uuid4()
-    stored_key = storage.save(str(key), uploaded_file)
-
-try:
-    with transaction.atomic():
+        storage = storages['private']
+        existing_clean = Attachment.objects.filter(
+            content_sha256=content_sha256,
+            scan_status=Attachment.ScanStatus.CLEAN,
+        ).first()
         if existing_clean:
-            # Create attachment record pointing to existing clean file
-            attachment = Attachment.objects.create(
-                owner=request.user,
-                key=key,
-                original_name=uploaded_file.name,
-                size=uploaded_file.size,
-                detected_mime=detected_mime,
-                scan_status=Attachment.ScanStatus.CLEAN,
-                content_sha256=content_sha256,
-                scanned_sha256=content_sha256,
-                scanned_at=existing_clean.scanned_at,
-            )
+            key = existing_clean.key
+            stored_key = None
         else:
-            attachment = Attachment.objects.create(
-                owner=request.user,
-                key=key,
-                original_name=uploaded_file.name,
-                size=uploaded_file.size,
-                detected_mime=detected_mime,
-                scan_status=Attachment.ScanStatus.PENDING_SCAN,
-                content_sha256=content_sha256,
-            )
-            enqueue_outbox_event(
-                kind='attachment.scan_requested',
-                payload={
-                    'attachment_id': attachment.pk,
-                    'sha256': content_sha256,
-                },
-                dedup_key=f'attachment:{attachment.pk}:scan:{content_sha256}',
-            )
+            key = uuid.uuid4()
+            stored_key = storage.save(str(key), uploaded_file)
+
+        try:
+            with transaction.atomic():
+                if existing_clean:
+                    attachment = Attachment.objects.create(
+                        owner=request.user,
+                        key=key,
+                        original_name=uploaded_file.name,
+                        size=uploaded_file.size,
+                        detected_mime=detected_mime,
+                        scan_status=Attachment.ScanStatus.CLEAN,
+                        content_sha256=content_sha256,
+                        scanned_sha256=content_sha256,
+                        scanned_at=existing_clean.scanned_at,
+                    )
+                else:
+                    attachment = Attachment.objects.create(
+                        owner=request.user,
+                        key=key,
+                        original_name=uploaded_file.name,
+                        size=uploaded_file.size,
+                        detected_mime=detected_mime,
+                        scan_status=Attachment.ScanStatus.PENDING_SCAN,
+                        content_sha256=content_sha256,
+                    )
+                    enqueue_outbox_event(
+                        kind='attachment.scan_requested',
+                        payload={
+                            'attachment_id': attachment.pk,
+                            'sha256': content_sha256,
+                        },
+                        dedup_key=(
+                            f'attachment:{attachment.pk}:scan:{content_sha256}'
+                        ),
+                    )
         except (DatabaseError, ValueError):
-            storage.delete(stored_key)
+            if stored_key is not None:
+                storage.delete(stored_key)
             raise
 
         return Response(

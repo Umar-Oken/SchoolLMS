@@ -952,6 +952,133 @@ Ular qo‘shilganda yopiq term siyosatini chetlab o‘tmaslik uchun
 `academics.services.ensure_term_open()` shared guard’ini tegishli service
 ichida chaqirish talab qilinadi.
 
+### Savol banki: single-choice va essay
+
+`Question` savol matni va kursga tegishliligini saqlaydi; uning `Option`
+qatorlari tanlovlardir. `single_choice` savolda variantlar ichida aynan bittasi
+`is_correct=true` bo‘lishi shart. `essay` savolda option umuman yuborilmaydi;
+teacherning private `marking_note`i manual baholash mezoni sifatida saqlanadi.
+Bu ichki bank: pupil uchun read yoki write endpoint yo‘q, shuning uchun correct
+flag va marking note pupil javobiga hech qachon chiqmaydi.
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `GET /api/v1/courses/<course_id>/questions/` | Faqat shu kursga bugun faol biriktirilgan teacher | `200` — draft/published savollar va private teacher maydonlari | Pupil `403`; boshqa teacher yoki course `404` |
+| `POST /api/v1/questions/` | Faol biriktirilgan teacher; `course`, `stem`, `type`; single-choice uchun `options`, essay uchun optional `marking_note` | `201` — `version=1`, `state=draft` savol | 0 yoki 2+ correct option, essayga `options`, ortiqcha field `400`; begona course `404`; pupil `403` |
+| `GET /api/v1/questions/<id>/` | Savol kursiga faol biriktirilgan teacher | `200` — faol draft/published savol | Boshqa teacher yoki archived ID `404`; pupil `403` |
+| `PATCH /api/v1/questions/<id>/` | Faol biriktirilgan teacher | `200` — draft o‘rnida yangilanadi; published savol o‘rniga yangi draft version qaytadi | Essayga `options`, noto‘g‘ri correct option `400`; begona teacher `404` |
+| `POST /api/v1/questions/<id>/archive/` | Faol biriktirilgan teacher; body kerak emas | `200` — `state=archived`, `archived_at` bilan qator saqlanadi | Boshqa teacher/pupil `404`/`403` |
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/questions/ \
+  -H "Authorization: Bearer <access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "course": 12,
+    "stem": "2 + 2 nechiga teng?",
+    "options": [
+      {"text": "3", "is_correct": false},
+      {"text": "4", "is_correct": true}
+    ]
+  }'
+```
+
+Published savol PATCH qilinganda eski qator va uning option kaliti o‘zgarmaydi:
+yangi qator o‘sha `family_id`, keyingi `version`, `state=draft` bilan yaratiladi.
+`(family_id, version)` PostgreSQL unique constraint bilan takrorlanmaydi.
+Question version hali examga ulanmagan; exam, grading, random tanlash va AI bu
+bosqichda yo‘q.
+
+### Draft nazorat metadata’si
+
+`opens_at` va `closes_at` nazorat oynasini, `duration` bitta attempt uchun
+vaqt limitini, `attempt_limit` urinishlar sonini belgilaydi. `result_release_at`
+natijani chiqarish siyosatining chegarasidir: kelajakdagi pupil result endpointi
+faqat nazorat yopilgach **va** bu vaqt yetgach score qaytarishi mumkin. Hozir
+score, javob kaliti, savol tarkibi yoki pupil attempt endpointi umuman yo‘q.
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `GET /api/v1/exams/` | Teacher — faol biriktirilgan course’dagi draft/published metadata; pupil — faqat kelajakda published bo‘ladigan, o‘z course’idagi metadata | `200` — metadata ro‘yxati, score/kalitsiz | Pupil draftlarni bo‘sh ro‘yxatda ko‘radi |
+| `POST /api/v1/exams/` | Faqat faol assigned teacher; course, term, title, opens/closes, duration, attempt_limit, result_release_at | `201` — `state=draft` Exam metadata | Begona course `404`; teskari vaqt, 0 duration/limit, course-term yil nomosligi `400`; pupil `403` |
+| `GET /api/v1/exams/<id>/` | Teacher o‘z scope’ida; pupil faqat published resource bo‘lganda | `200` — metadata | Draft/begona ID `404` |
+| `PUT/PATCH /api/v1/exams/<id>/` | Faqat faol assigned teacher, draft metadata maydonlari | `200` — yangilangan metadata | Noto‘g‘ri vaqt/limit `400`; pupil `403` |
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/v1/exams/ \
+  -H "Authorization: Bearer <access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "course": 12,
+    "term": 3,
+    "title": "Kasrlar nazorati",
+    "opens_at": "2026-11-25T04:00:00Z",
+    "closes_at": "2026-11-25T06:00:00Z",
+    "duration": "01:00:00",
+    "attempt_limit": 1,
+    "result_release_at": "2026-11-25T06:00:00Z"
+  }'
+```
+
+### Draft nazorat savollari
+
+`ExamItem` hozir question bankdagi aniq `question` ID va `question_version`
+ga reference qiladi; bu publish snapshot emas. `position` savol tartibini,
+`points` esa uning max ballini belgilaydi. `PUT` ro‘yxatni to‘liq atomar
+almashtiradi: ro‘yxatdagi bitta item yaroqsiz bo‘lsa, avvalgi itemlar saqlanadi.
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `PUT /api/v1/exams/<id>/items/` | Faqat faol assigned teacher va draft Exam; body — itemlar JSON ro‘yxati | `200` — position bo‘yicha tartiblangan yangi itemlar | Begona/archived question yoki noto‘g‘ri version, 0 points, duplicate position `400`; published/begona exam `404`; pupil `403` |
+
+```bash
+curl -X PUT http://127.0.0.1:8000/api/v1/exams/8/items/ \
+  -H "Authorization: Bearer <access-token>" \
+  -H "Content-Type: application/json" \
+  -d '[
+    {"question": 31, "question_version": 1, "points": "2.50", "position": 0},
+    {"question": 35, "question_version": 2, "points": "5.00", "position": 1}
+  ]'
+```
+
+Random selection, publish, snapshot, attempt yoki answer endpointi bu bosqichda
+yo‘q; P065 publish vaqtida immutable snapshotni yaratadi.
+
+### Exam publish va immutable snapshot
+
+`POST /publish/` draft Exam itemlarini va ularning savol matni, turi, essay
+`marking_note`, option matni, correct kaliti, points va positionini serverda
+snapshot qiladi. Shundan keyin bank savolini tahrirlash published exam tarkibini
+o‘zgartirmaydi. Publish bitta transaction va exam row lock bilan bajariladi;
+takror so‘rov dastlabki publish vaqtini saqlaydi va yangi audit/snapshot qatori
+yaratmaydi.
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `POST /api/v1/exams/<id>/publish/` | Faqat faol assigned teacher; body kerak emas | `200` — `state=published`, `published_at` bilan metadata | Items bo‘sh, key/version/course, duration/limit/release vaqt yaroqsiz `400`; begona exam `404`; pupil `403` |
+
+Publish audit actor, vaqt va umumiy max ballni saqlaydi. Snapshotdagi kalit va
+marking note hech qaysi pupil responsega chiqmaydi; attempt/start/answer/check
+endpointlari hali yo‘q.
+
+### Kalitsiz pupil nazorat kartasi
+
+Pupil endpointlari “hidden” private fieldga tayanmaydi: response serializerda
+`is_correct`, `marking_note`, score, item yoki snapshot maydoni mutlaqo yo‘q.
+Pupil published examning `upcoming`, `open` yoki `closed` holatini ko‘radi;
+draft va boshqa course exam IDlari `404`. Teacher uchun alohida preview endpoint
+published snapshotning private key/note maydonlarini qaytaradi.
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `GET /api/v1/exams/` | Pupil — o‘z course’idagi published examlar | `200` — `id`, title, opens/closes, duration, attempt_limit, status | Draft boshqa userga chiqmaydi |
+| `GET /api/v1/exams/<id>/` | Pupil — o‘z published exam’i | `200` — ayni kalitsiz karta | Draft yoki begona exam `404` |
+| `GET /api/v1/exams/<id>/preview/` | Faqat faol assigned teacher; published exam | `200` — snapshot itemlari, `marking_note`, optionlar va `is_correct` | Pupil `403`; begona/draft exam `404` |
+
+Pupil cardda status: `upcoming` (`opens_at`dan oldin), `open` (oyna ichida),
+`closed` (`closes_at`dan keyin). Bu bosqichda pupilga savol banki, attempt
+boshlash, javob yuborish va natija endpointi yo‘q.
+
 ### Private fayl yuklash
 
 | Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |

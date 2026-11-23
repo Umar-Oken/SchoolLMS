@@ -100,6 +100,7 @@ INSTALLED_APPS = [
     'notifications.apps.NotificationsConfig',
     'learning.apps.LearningConfig',
     'assignments.apps.AssignmentsConfig',
+    'assessments.apps.AssessmentsConfig',
     'files.apps.FilesConfig',
     'apps.apps.AppsConfig',
     'rest_framework',
@@ -178,6 +179,7 @@ SPECTACULAR_SETTINGS = {
         {'name': 'Notifications', 'description': 'In-app bildirishnomalar.'},
         {'name': 'Files', 'description': 'Private fayllarni yuklash.'},
         {'name': 'Scheduling', 'description': 'Dars jadvali va davomat.'},
+        {'name': 'Assessments', 'description': 'Savol banki va draft nazoratlar.'},
     ],
     'REDOC_DIST': 'SIDECAR',
     'SWAGGER_UI_SETTINGS': {
