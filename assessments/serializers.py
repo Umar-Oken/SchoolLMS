@@ -1,13 +1,14 @@
 from django.db import transaction
 from django.utils import timezone
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from rest_framework import serializers
 from rest_framework.exceptions import NotFound
+from drf_spectacular.utils import extend_schema_field
 
 from academics.models import CourseOffering
 from academics.views import teacher_course_scope
-from assessments.models import Exam, ExamItem, Option, Question
+from assessments.models import Answer, Attempt, AttemptGrade, AttemptGradeAudit, AttemptItem, AttemptOption, AttemptResult, Exam, ExamItem, Option, Question
 from assessments.models import ExamSnapshotItem, ExamSnapshotOption
 
 
@@ -312,6 +313,226 @@ class TeacherExamPreviewSerializer(serializers.ModelSerializer):
             'snapshot_items',
         )
         read_only_fields = fields
+
+
+class PupilAttemptOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AttemptOption
+        fields = ('id', 'text', 'position')
+        read_only_fields = fields
+
+
+class PupilAnswerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Answer
+        fields = ('selected_option', 'essay_text', 'version', 'saved_at')
+        read_only_fields = fields
+
+
+class PupilAttemptItemSerializer(serializers.ModelSerializer):
+    options = PupilAttemptOptionSerializer(many=True, read_only=True)
+    answer = serializers.SerializerMethodField()
+
+    @extend_schema_field(PupilAnswerSerializer(allow_null=True))
+    def get_answer(self, item):
+        answer = getattr(item, 'answer', None)
+        if answer is None:
+            return None
+        return PupilAnswerSerializer(answer).data
+
+    class Meta:
+        model = AttemptItem
+        fields = ('id', 'stem', 'type', 'position', 'options', 'answer')
+        read_only_fields = fields
+
+
+class PupilAttemptSerializer(serializers.ModelSerializer):
+    items = PupilAttemptItemSerializer(many=True, read_only=True)
+    server_now = serializers.SerializerMethodField()
+
+    def get_server_now(self, attempt) -> datetime:
+        return timezone.now()
+
+    class Meta:
+        model = Attempt
+        fields = ('id', 'attempt_number', 'started_at', 'expires_at', 'state', 'server_now', 'items')
+        read_only_fields = fields
+
+
+class AttemptFinishSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AttemptResult
+        fields = ('status', 'finished_at')
+        read_only_fields = fields
+
+
+class TeacherAttemptGradeSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AttemptGrade
+        fields = ('points', 'feedback', 'version', 'graded_at')
+        read_only_fields = fields
+
+
+class AttemptGradeAuditSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AttemptGradeAudit
+        fields = (
+            'old_points', 'new_points', 'old_feedback', 'new_feedback',
+            'version', 'changed_at',
+        )
+        read_only_fields = fields
+
+
+class TeacherEssayGradeInputSerializer(serializers.Serializer):
+    points = serializers.DecimalField(max_digits=8, decimal_places=2, min_value=Decimal('0'))
+    feedback = serializers.CharField(required=False, allow_blank=True, default='')
+    expected_version = serializers.IntegerField(min_value=0)
+
+    def to_internal_value(self, data):
+        if hasattr(data, 'keys'):
+            extra_fields = set(data.keys()) - set(self.fields)
+            if extra_fields:
+                raise serializers.ValidationError({
+                    field: 'Bu maydon qabul qilinmaydi.'
+                    for field in extra_fields
+                })
+        return super().to_internal_value(data)
+
+    def validate_points(self, points):
+        if points > self.context['max_score']:
+            raise serializers.ValidationError('Ball item max_score qiymatidan katta.')
+        return points
+
+
+class TeacherEssayItemSerializer(serializers.ModelSerializer):
+    answer_text = serializers.SerializerMethodField()
+    grade = TeacherAttemptGradeSerializer(source='manual_grade', allow_null=True, read_only=True)
+    audit = serializers.SerializerMethodField()
+    max_score = serializers.SerializerMethodField()
+
+    @extend_schema_field(serializers.DecimalField(max_digits=8, decimal_places=2))
+    def get_max_score(self, item):
+        return self.context.get('max_scores', {}).get(item.source_snapshot_item_id)
+
+    @extend_schema_field(serializers.CharField(allow_null=True))
+    def get_answer_text(self, item):
+        answer = getattr(item, 'answer', None)
+        return None if answer is None else answer.essay_text
+
+    @extend_schema_field(AttemptGradeAuditSerializer(many=True))
+    def get_audit(self, item):
+        grade = getattr(item, 'manual_grade', None)
+        if grade is None:
+            return []
+        return AttemptGradeAuditSerializer(grade.audits.all(), many=True).data
+
+    class Meta:
+        model = AttemptItem
+        fields = ('id', 'stem', 'max_score', 'answer_text', 'grade', 'audit')
+        read_only_fields = fields
+
+
+class TeacherAttemptGradingSerializer(serializers.ModelSerializer):
+    essay_items = TeacherEssayItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Attempt
+        fields = ('id', 'pupil', 'state', 'essay_items')
+        read_only_fields = fields
+
+
+class PupilAttemptResultSerializer(serializers.ModelSerializer):
+    total_score = serializers.SerializerMethodField()
+    total_max_score = serializers.SerializerMethodField()
+
+    @extend_schema_field(
+        serializers.DecimalField(max_digits=8, decimal_places=2, allow_null=True),
+    )
+    def get_total_score(self, result):
+        return result.total_score if result.status == AttemptResult.Status.FINALIZED else None
+
+    @extend_schema_field(
+        serializers.DecimalField(max_digits=8, decimal_places=2, allow_null=True),
+    )
+    def get_total_max_score(self, result):
+        return result.total_max_score if result.status == AttemptResult.Status.FINALIZED else None
+
+    class Meta:
+        model = AttemptResult
+        fields = ('status', 'total_score', 'total_max_score', 'finished_at')
+        read_only_fields = fields
+
+
+class PupilExamGradebookSerializer(serializers.ModelSerializer):
+    source_kind = serializers.SerializerMethodField()
+    attempt_id = serializers.IntegerField(read_only=True)
+    title = serializers.CharField(source='attempt.exam.title', read_only=True)
+    course_id = serializers.IntegerField(source='attempt.exam.course_id', read_only=True)
+    term_id = serializers.IntegerField(source='attempt.exam.term_id', read_only=True)
+
+    @extend_schema_field(serializers.ChoiceField(choices=('exam',)))
+    def get_source_kind(self, result):
+        return 'exam'
+
+    class Meta:
+        model = AttemptResult
+        fields = (
+            'source_kind', 'attempt_id', 'title', 'course_id', 'term_id',
+            'total_score', 'total_max_score', 'finished_at',
+        )
+        read_only_fields = fields
+
+
+class TeacherExamGradebookSerializer(PupilExamGradebookSerializer):
+    pupil_id = serializers.IntegerField(source='attempt.pupil_id', read_only=True)
+    pupil_name = serializers.SerializerMethodField()
+    status = serializers.CharField(read_only=True)
+
+    @extend_schema_field(serializers.CharField())
+    def get_pupil_name(self, result):
+        return result.attempt.pupil.get_full_name()
+
+    class Meta(PupilExamGradebookSerializer.Meta):
+        fields = (
+            'source_kind', 'attempt_id', 'title', 'course_id', 'term_id',
+            'pupil_id', 'pupil_name', 'status', 'total_score',
+            'total_max_score', 'finished_at',
+        )
+
+
+class AnswerUpsertSerializer(serializers.Serializer):
+    selected_option = serializers.PrimaryKeyRelatedField(
+        queryset=AttemptOption.objects.all(),
+        required=False,
+    )
+    essay_text = serializers.CharField(required=False, allow_blank=True)
+    expected_version = serializers.IntegerField(min_value=0)
+
+    def to_internal_value(self, data):
+        if hasattr(data, 'keys'):
+            extra_fields = set(data.keys()) - set(self.fields)
+            if extra_fields:
+                raise serializers.ValidationError({
+                    field: 'Bu maydon qabul qilinmaydi.'
+                    for field in extra_fields
+                })
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        item = self.context['attempt_item']
+        if item.type == Question.Type.SINGLE_CHOICE:
+            if 'selected_option' not in attrs or 'essay_text' in self.initial_data:
+                raise serializers.ValidationError({
+                    'selected_option': 'Single-choice javob uchun option majburiy.',
+                })
+        elif item.type == Question.Type.ESSAY:
+            if 'essay_text' not in attrs or 'selected_option' in self.initial_data:
+                raise serializers.ValidationError({
+                    'essay_text': 'Essay javob uchun matn majburiy.',
+                })
+        else:
+            raise serializers.ValidationError({'detail': 'Noma’lum savol turi.'})
+        return attrs
 
 
 class ExamItemInputListSerializer(serializers.ListSerializer):

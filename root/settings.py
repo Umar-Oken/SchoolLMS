@@ -263,7 +263,12 @@ CELERY_TASK_ROUTES = {
     'scans.*': {'queue': 'scans'},
     'ai.*': {'queue': 'ai'},
 }
-CELERY_IMPORTS = ('root.tasks',)
+CELERY_IMPORTS = (
+    'root.tasks',
+    'outbox.tasks',
+    'notifications.tasks',
+    'assessments.tasks',
+)
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_ACCEPT_CONTENT = ('json',)
 CELERY_RESULT_SERIALIZER = 'json'
@@ -282,6 +287,11 @@ CELERY_BEAT_SCHEDULE = {
     'create-assignment-deadline-reminders': {
         'task': 'notifications.tasks.create_deadline_reminders',
         'schedule': 300.0,
+        'options': {'queue': 'default'},
+    },
+    'finalize-expired-assessment-attempts': {
+        'task': 'assessments.tasks.finalize_expired_attempts',
+        'schedule': 60.0,
         'options': {'queue': 'default'},
     },
 }

@@ -1076,8 +1076,115 @@ published snapshotning private key/note maydonlarini qaytaradi.
 | `GET /api/v1/exams/<id>/preview/` | Faqat faol assigned teacher; published exam | `200` — snapshot itemlari, `marking_note`, optionlar va `is_correct` | Pupil `403`; begona/draft exam `404` |
 
 Pupil cardda status: `upcoming` (`opens_at`dan oldin), `open` (oyna ichida),
-`closed` (`closes_at`dan keyin). Bu bosqichda pupilga savol banki, attempt
-boshlash, javob yuborish va natija endpointi yo‘q.
+`closed` (`closes_at`dan keyin).
+
+### Pupil urinishini boshlash
+
+`POST /api/v1/exams/<id>/attempts/` faqat current pupil uchun ishlaydi. Exam
+`published` va ayni paytda ochiq bo‘lishi, pupilning shu course bo‘yicha faol
+Enrollment’i hamda urinish limiti yaroqli bo‘lishi shart. Bir pupil-exam jufti
+uchun faol urinish atigi bitta: enrollment qatori row lock ostida tekshiriladi
+va parallel startlar aynan o‘sha mavjud yoki yangi attemptni qaytaradi.
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `POST /api/v1/exams/<id>/attempts/` | Faqat faol enrollment’li pupil; body yo‘q | `201` — `id`, `attempt_number`, `started_at`, `expires_at`, `state`, `server_now`, tartiblangan item/option textlari | Draft/yopiq exam, inactive enrollment yoki limit `400`; begona exam `404`; teacher `403` |
+
+`expires_at = min(started_at + duration, closes_at)`. Startda published exam
+snapshotidan savol va option tartibi `AttemptItem`/`AttemptOption`ga bir marta
+ko‘chiriladi. Pupil payloadida `is_correct`, marking note, points, score yoki
+boshqa baholash kaliti umuman mavjud emas.
+
+### Attemptni qayta ochish va versionli autosave
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `GET /api/v1/attempts/<id>/` | Faqat urinish egasi bo‘lgan pupil | `200` — kalitsiz savol/optionlar, oldingi answer va uning `version`/`saved_at` ACK’i | Begona ID `404`; teacher `403` |
+| `PUT /api/v1/attempts/<id>/answers/<item_id>/` | Faqat urinish egasi bo‘lgan pupil | `200` — server saqlagan `selected_option` yoki `essay_text`, yangi `version`, `saved_at` | Begona item/attempt `404`; stale version, expired yoki inactive attempt, noto‘g‘ri option/tur `400`; teacher `403` |
+
+Single-choice body faqat `{ "selected_option": <shu item option ID>,
+"expected_version": <n> }`; essay body faqat `{ "essay_text": "...",
+"expected_version": <n> }`. Birinchi saqlash `expected_version=0` bilan
+boshlanadi. Keyingi saqlashda qiymat joriy server versioniga teng bo‘lishi
+kerak; aks holda eski tabning lost update’i rad etiladi. Har PUT transaction va
+row lock ichida `active` attempt hamda `now < expires_at` shartlarini qayta
+tekshiradi. Finish yoki scoring endpointi hali yo‘q.
+
+### Attemptni yakunlash
+
+`POST /api/v1/attempts/<id>/finish/` body qabul qilmaydi. U faqat avval serverda
+saqlangan single-choice answerlarni immutable publish snapshot kaliti bilan
+hisoblaydi. Essay item bor bo‘lsa objective qism hisoblangan bo‘lsa ham status
+`pending_manual`; essaysiz urinish `finalized`. Finish expiry’dan keyin ham
+ishlaydi, biroq yangi answer qabul qilmaydi.
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `POST /api/v1/attempts/<id>/finish/` | Faqat urinish egasi bo‘lgan pupil; body yo‘q | `200` — `status` (`finalized` yoki `pending_manual`) va `finished_at` | Begona attempt `404`; body yuborish yoki yaroqsiz holat `400`; teacher `403` |
+
+Attempt row lock ostida bir marta yakunlanadi; takroriy POST avvalgi yakunni
+qaytaradi. `objective_score` serverda saqlanadi, ammo P063 result-release
+siyosati tufayli pupil finish responseida score yoki kalit chiqmaydi. Finish,
+essay grading, natijani release qilish yoki expiry worker qo‘shmaydi.
+
+### Essay baholash va release qilingan natija
+
+Objective score finishda, manual score esa faqat active `can_grade` teacher
+tomonidan server snapshot itemining `max_score` chegarasida qo‘shiladi. Har
+essay grade `expected_version` bilan yangilanadi va immutable audit yozuvini
+oladi. Barcha essay itemlar baholanmaguncha AttemptResult `pending_manual`,
+`total_score` esa `null`; yakunda server `objective + manual` totalini hisoblab
+`finalized` qiladi.
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `GET /api/v1/attempts/<id>/grading/` | Faqat course bo‘yicha active `can_grade` teacher | `200` — essay text, max score, current grade va audit | Begona/no-grade teacher `404`; pupil `403` |
+| `PUT /api/v1/attempts/<id>/items/<item_id>/grade/` | Shu `can_grade` teacher | `200` — points, feedback, version, graded_at | Non-essay/begona item `404`; stale version yoki 0..max_score tashqarisi `400` |
+| `GET /api/v1/attempts/<id>/result/` | Faqat attempt egasi pupil | `200` — status va finalized bo‘lsa total/max total | Begona ID yoki exam yopilmagan/release vaqt kelmagan `404` |
+| `GET /api/v1/me/exam-gradebook/` | Pupil | `200` — release qilingan finalized exam natijalari, `source_kind=exam` | Pupil bo‘lmagan user `403` |
+| `GET /api/v1/courses/<course_pk>/exam-gradebook/` | Active `can_grade` teacher | `200` — course attempt natijalari, `source_kind=exam` | Begona/no-grade teacher `404`; pupil `403` |
+
+Pupil natijasi faqat `closes_at` hamda `result_release_at` o‘tgach ko‘rinadi;
+pending manual holatda total chiqmaydi. Gradebook qatori `AttemptResult`dan
+o‘qiladi, shuning uchun duplicate finish yoki manual grade update qo‘shimcha
+jurnal yozuvi yaratmaydi. Chorak weight, AI auto-grade va appeal yo‘q.
+
+### Expired attemptni serverda yakunlash
+
+Frontend timer deadline manbai emas: `expires_at` serverdagi yagona chegara.
+Answer PUT `now >= expires_at` bo‘lsa har doim rad etiladi — Celery worker yoki
+Beat ishlamayotgani bu qoidani o‘zgartirmaydi. Pupil expired attemptni GET qilsa
+server shu safe finalize xizmatini chaqirib, mavjud javoblarni yakunlaydi.
+
+Celery Beat har 60 soniyada `assessments.tasks.finalize_expired_attempts`
+taskini default queue’ga yuboradi. Task expiry bo‘yicha tartiblangan ko‘pi bilan
+100 active attemptni tanlaydi, transient DB xatolarida exponential retry qiladi.
+U `finalize_attempt`ning row lock/idempotent qoidalarini qayta ishlatadi:
+API finish va worker bir paytda ishlasa ham bitta AttemptResult yaratiladi;
+kechikkan scheduler deadline’ni uzaytirmaydi.
+
+### Attempt lifecycle regression transcript (P072)
+
+Schema contract `python manage.py spectacular --validate --file /tmp/p072-schema.yml`
+bilan tekshiriladi. Quyidagi curl oqimi pupil tokeni bilan API lifecycle’ni
+takrorlaydi; `selected_option` va `expected_version` oldingi response’dan
+olinadi.
+
+```bash
+curl -X POST "$API/exams/$EXAM_ID/attempts/" -H "Authorization: Bearer $TOKEN"
+curl "$API/attempts/$ATTEMPT_ID/" -H "Authorization: Bearer $TOKEN"
+curl -X PUT "$API/attempts/$ATTEMPT_ID/answers/$ITEM_ID/" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"selected_option": 42, "expected_version": 0}'
+curl -X POST "$API/attempts/$ATTEMPT_ID/finish/" -H "Authorization: Bearer $TOKEN"
+curl "$API/attempts/$ATTEMPT_ID/result/" -H "Authorization: Bearer $TOKEN"
+```
+
+Ikkinchi start mavjud active attemptni, ikkinchi finish mavjud final resultni
+qaytaradi. Stale version va `expires_at`dan keyingi answer `400`; release
+vaqtigacha result `404`. Pupil payloadlari recursive tekshiruvda `is_correct`
+va `marking_note`dan xoli. Real concurrency regressiyasi alohida PostgreSQL
+connectionlari bilan start, finish hamda worker/API expiry race’ini tekshiradi.
 
 ### Private fayl yuklash
 

@@ -219,3 +219,203 @@ class ExamSnapshotOption(models.Model):
                 name='assessments_snapshot_option_position_unique',
             ),
         ]
+
+
+class Attempt(models.Model):
+    class State(models.TextChoices):
+        ACTIVE = 'active', 'Active'
+        FINISHED = 'finished', 'Finished'
+
+    exam = models.ForeignKey(Exam, on_delete=models.PROTECT, related_name='attempts')
+    pupil = models.ForeignKey('accounts.User', on_delete=models.PROTECT, related_name='exam_attempts')
+    enrollment = models.ForeignKey('academics.Enrollment', on_delete=models.PROTECT, related_name='exam_attempts')
+    attempt_number = models.PositiveSmallIntegerField()
+    started_at = models.DateTimeField()
+    expires_at = models.DateTimeField()
+    state = models.CharField(max_length=10, choices=State.choices, default=State.ACTIVE)
+
+    class Meta:
+        ordering = ('attempt_number', 'pk')
+        constraints = [
+            models.UniqueConstraint(fields=('exam', 'pupil', 'attempt_number'), name='assessments_attempt_number_unique'),
+            models.UniqueConstraint(fields=('exam', 'pupil'), condition=Q(state='active'), name='assessments_one_active_attempt'),
+            models.CheckConstraint(condition=Q(attempt_number__gt=0), name='assessments_attempt_number_positive'),
+            models.CheckConstraint(condition=Q(expires_at__gt=F('started_at')), name='assessments_attempt_expires_after_start'),
+        ]
+
+
+class AttemptItem(models.Model):
+    attempt = models.ForeignKey(Attempt, on_delete=models.CASCADE, related_name='items')
+    source_snapshot_item_id = models.PositiveBigIntegerField()
+    stem = models.TextField()
+    type = models.CharField(max_length=20, choices=Question.Type.choices)
+    position = models.PositiveSmallIntegerField()
+
+    class Meta:
+        ordering = ('position', 'pk')
+        constraints = [models.UniqueConstraint(fields=('attempt', 'position'), name='assessments_attempt_item_position_unique')]
+
+
+class AttemptOption(models.Model):
+    attempt_item = models.ForeignKey(AttemptItem, on_delete=models.CASCADE, related_name='options')
+    text = models.TextField()
+    position = models.PositiveSmallIntegerField()
+
+    class Meta:
+        ordering = ('position', 'pk')
+        constraints = [models.UniqueConstraint(fields=('attempt_item', 'position'), name='assessments_attempt_option_position_unique')]
+
+
+class Answer(models.Model):
+    attempt_item = models.OneToOneField(
+        AttemptItem,
+        on_delete=models.CASCADE,
+        related_name='answer',
+    )
+    selected_option = models.ForeignKey(
+        AttemptOption,
+        on_delete=models.PROTECT,
+        related_name='answers',
+        blank=True,
+        null=True,
+    )
+    essay_text = models.TextField(blank=True, default='')
+    version = models.PositiveIntegerField(default=1)
+    saved_at = models.DateTimeField()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(version__gt=0),
+                name='assessments_answer_version_positive',
+            ),
+        ]
+
+
+class AttemptResult(models.Model):
+    class Status(models.TextChoices):
+        FINALIZED = 'finalized', 'Finalized'
+        PENDING_MANUAL = 'pending_manual', 'Pending manual'
+
+    attempt = models.OneToOneField(
+        Attempt,
+        on_delete=models.PROTECT,
+        related_name='result',
+    )
+    status = models.CharField(max_length=20, choices=Status.choices)
+    objective_score = models.DecimalField(max_digits=8, decimal_places=2)
+    objective_max_score = models.DecimalField(max_digits=8, decimal_places=2)
+    manual_score = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    manual_max_score = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    total_score = models.DecimalField(
+        max_digits=8, decimal_places=2, blank=True, null=True,
+    )
+    total_max_score = models.DecimalField(max_digits=8, decimal_places=2, default=0)
+    finished_at = models.DateTimeField()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(objective_score__gte=0),
+                name='assessments_result_score_nonnegative',
+            ),
+            models.CheckConstraint(
+                condition=Q(objective_max_score__gte=0),
+                name='assessments_result_max_score_nonnegative',
+            ),
+            models.CheckConstraint(
+                condition=Q(objective_score__lte=F('objective_max_score')),
+                name='assessments_result_score_within_max',
+            ),
+            models.CheckConstraint(
+                condition=Q(manual_score__gte=0),
+                name='assessments_result_manual_score_nonnegative',
+            ),
+            models.CheckConstraint(
+                condition=Q(manual_max_score__gte=0),
+                name='assessments_result_manual_max_score_nonnegative',
+            ),
+            models.CheckConstraint(
+                condition=Q(manual_score__lte=F('manual_max_score')),
+                name='assessments_result_manual_score_within_max',
+            ),
+            models.CheckConstraint(
+                condition=Q(total_max_score__gte=0),
+                name='assessments_result_total_max_score_nonnegative',
+            ),
+            models.CheckConstraint(
+                condition=Q(total_score__isnull=True) | Q(total_score__gte=0),
+                name='assessments_result_total_score_nonnegative',
+            ),
+            models.CheckConstraint(
+                condition=Q(total_score__isnull=True) | Q(total_score__lte=F('total_max_score')),
+                name='assessments_result_total_score_within_max',
+            ),
+        ]
+
+
+class AttemptGrade(models.Model):
+    attempt_item = models.OneToOneField(
+        AttemptItem,
+        on_delete=models.PROTECT,
+        related_name='manual_grade',
+    )
+    grader = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.PROTECT,
+        related_name='attempt_grades_given',
+    )
+    points = models.DecimalField(max_digits=8, decimal_places=2)
+    feedback = models.TextField(blank=True, default='')
+    version = models.PositiveIntegerField(default=1)
+    graded_at = models.DateTimeField()
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(points__gte=0),
+                name='assessments_attempt_grade_points_nonnegative',
+            ),
+            models.CheckConstraint(
+                condition=Q(version__gt=0),
+                name='assessments_attempt_grade_version_positive',
+            ),
+        ]
+
+
+class AttemptGradeAudit(models.Model):
+    grade = models.ForeignKey(
+        AttemptGrade,
+        on_delete=models.PROTECT,
+        related_name='audits',
+    )
+    changed_by = models.ForeignKey(
+        'accounts.User',
+        on_delete=models.PROTECT,
+        related_name='attempt_grade_audits',
+    )
+    old_points = models.DecimalField(
+        max_digits=8, decimal_places=2, blank=True, null=True,
+    )
+    new_points = models.DecimalField(max_digits=8, decimal_places=2)
+    old_feedback = models.TextField(blank=True, default='')
+    new_feedback = models.TextField(blank=True, default='')
+    version = models.PositiveIntegerField()
+    changed_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ('version', 'pk')
+        constraints = [
+            models.UniqueConstraint(
+                fields=('grade', 'version'),
+                name='assessments_attempt_grade_audit_version_unique',
+            ),
+            models.CheckConstraint(
+                condition=Q(new_points__gte=0),
+                name='assessments_attempt_grade_audit_points_nonnegative',
+            ),
+            models.CheckConstraint(
+                condition=Q(version__gt=0),
+                name='assessments_attempt_grade_audit_version_positive',
+            ),
+        ]

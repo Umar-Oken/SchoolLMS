@@ -1,6 +1,8 @@
 from root.celery import app
 from root.tasks import diagnostic_ping
 from outbox.tasks import consume_outbox_event
+from notifications.tasks import create_due_soon_reminders
+from assessments.tasks import finalize_expired_attempts
 
 
 def test_celery_declares_default_scans_and_ai_queues():
@@ -62,5 +64,14 @@ def test_beat_checks_assignment_deadlines_every_five_minutes():
 
     assert schedule['task'] == 'notifications.tasks.create_deadline_reminders'
     assert schedule['schedule'] == 300.0
+    assert schedule['options']['queue'] == 'default'
+    assert app.tasks[schedule['task']].name == schedule['task']
+
+
+def test_beat_finalizes_expired_attempts_every_minute():
+    schedule = app.conf.beat_schedule['finalize-expired-assessment-attempts']
+
+    assert schedule['task'] == 'assessments.tasks.finalize_expired_attempts'
+    assert schedule['schedule'] == 60.0
     assert schedule['options']['queue'] == 'default'
     assert app.tasks[schedule['task']].name == schedule['task']

@@ -1,8 +1,11 @@
 from datetime import date, timedelta
 from decimal import Decimal
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 from django.utils import timezone
+from django.db import connection, connections
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -17,6 +20,10 @@ from academics.models import (
     Term,
 )
 from assessments.models import (
+    Attempt,
+    AttemptGrade,
+    AttemptGradeAudit,
+    AttemptResult,
     Exam,
     ExamItem,
     ExamPublishAudit,
@@ -25,6 +32,7 @@ from assessments.models import (
     Option,
     Question,
 )
+from assessments.tasks import finalize_expired_attempts
 
 
 @pytest.fixture
@@ -729,4 +737,534 @@ def test_pupil_cannot_access_draft_or_other_course_exam(question_bank_data):
     assert client.get(f'/api/v1/exams/{other_exam.pk}/').status_code == (
         status.HTTP_404_NOT_FOUND
     )
+
+
+@pytest.mark.django_db
+def test_pupil_starts_one_open_attempt_with_keyless_snapshot(question_bank_data):
+    exam = create_draft_exam(question_bank_data)
+    now = timezone.now()
+    exam.opens_at, exam.closes_at = now - timedelta(minutes=5), now + timedelta(hours=2)
+    exam.result_release_at = exam.closes_at
+    exam.save(update_fields=('opens_at', 'closes_at', 'result_release_at'))
+    question = Question.objects.create(course=question_bank_data['course'], stem='Attempt prompt')
+    Option.objects.create(question=question, text='Wrong', is_correct=False)
+    Option.objects.create(question=question, text='Correct', is_correct=True)
+    ExamItem.objects.create(exam=exam, question=question, question_version=1, points='1.00', position=0)
+    teacher = APIClient(); teacher.force_authenticate(question_bank_data['teacher'])
+    assert teacher.post(f'/api/v1/exams/{exam.pk}/publish/').status_code == 200
+    pupil = APIClient(); pupil.force_authenticate(question_bank_data['pupil'])
+    first = pupil.post(f'/api/v1/exams/{exam.pk}/attempts/')
+    second = pupil.post(f'/api/v1/exams/{exam.pk}/attempts/')
+    assert first.status_code == second.status_code == status.HTTP_201_CREATED
+    assert first.data['id'] == second.data['id']
+    assert first.data['expires_at'] <= exam.closes_at.isoformat().replace('+00:00', 'Z')
+    assert first.data['items'][0]['options'][1]['text'] == 'Correct'
+    assert not contains_private_pupil_field(first.data)
+    assert Attempt.objects.filter(exam=exam, pupil=question_bank_data['pupil'], state=Attempt.State.ACTIVE).count() == 1
+    Attempt.objects.filter(pk=first.data['id']).update(state=Attempt.State.FINISHED)
+    assert pupil.post(f'/api/v1/exams/{exam.pk}/attempts/').status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_attempt_rejects_closed_exam_inactive_enrollment_and_limit(question_bank_data):
+    exam = create_draft_exam(question_bank_data)
+    now = timezone.now()
+    exam.state = Exam.State.PUBLISHED; exam.published_at = now
+    exam.opens_at, exam.closes_at = now - timedelta(hours=2), now - timedelta(hours=1)
+    exam.save(update_fields=('state', 'published_at', 'opens_at', 'closes_at'))
+    client = APIClient(); client.force_authenticate(question_bank_data['pupil'])
+    assert client.post(f'/api/v1/exams/{exam.pk}/attempts/').status_code == status.HTTP_400_BAD_REQUEST
+    exam.opens_at, exam.closes_at = now - timedelta(minutes=1), now + timedelta(hours=1)
+    exam.save(update_fields=('opens_at', 'closes_at'))
+    enrollment = Enrollment.objects.get(
+        course=question_bank_data['course'], pupil=question_bank_data['pupil']
+    )
+    enrollment.status = 'closed'
+    enrollment.end_date = date.today()
+    enrollment.save(update_fields=('status', 'end_date'))
+    assert client.post(f'/api/v1/exams/{exam.pk}/attempts/').status_code == status.HTTP_400_BAD_REQUEST
+
+
+def parallel_attempt_start(*, barrier, user_id, exam_id):
+    connections.close_all()
+    try:
+        client = APIClient()
+        client.force_authenticate(User.objects.get(pk=user_id))
+        barrier.wait(timeout=10)
+        response = client.post(f'/api/v1/exams/{exam_id}/attempts/')
+        return response.status_code, response.data['id']
+    finally:
+        connections.close_all()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != 'postgresql', reason='PostgreSQL lock testi.')
+def test_parallel_attempt_start_keeps_one_active_attempt(question_bank_data):
+    exam = create_draft_exam(question_bank_data)
+    now = timezone.now()
+    exam.opens_at, exam.closes_at, exam.result_release_at = now - timedelta(minutes=1), now + timedelta(hours=2), now + timedelta(hours=2)
+    exam.save(update_fields=('opens_at', 'closes_at', 'result_release_at'))
+    question = Question.objects.create(course=question_bank_data['course'], stem='Parallel prompt')
+    Option.objects.create(question=question, text='No', is_correct=False)
+    Option.objects.create(question=question, text='Yes', is_correct=True)
+    ExamItem.objects.create(exam=exam, question=question, question_version=1, points='1.00', position=0)
+    teacher = APIClient(); teacher.force_authenticate(question_bank_data['teacher'])
+    assert teacher.post(f'/api/v1/exams/{exam.pk}/publish/').status_code == 200
+    barrier = Barrier(2)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [future.result(timeout=30) for future in [
+            executor.submit(parallel_attempt_start, barrier=barrier, user_id=question_bank_data['pupil'].pk, exam_id=exam.pk)
+            for _ in range(2)
+        ]]
+    assert [code for code, _ in results] == [status.HTTP_201_CREATED] * 2
+    assert results[0][1] == results[1][1]
+    assert Attempt.objects.filter(exam=exam, pupil=question_bank_data['pupil'], state=Attempt.State.ACTIVE).count() == 1
+
+
+def create_open_attempt(question_bank_data):
+    exam = create_draft_exam(question_bank_data)
+    now = timezone.now()
+    exam.opens_at = now - timedelta(minutes=1)
+    exam.closes_at = now + timedelta(hours=2)
+    exam.result_release_at = exam.closes_at
+    exam.save(update_fields=('opens_at', 'closes_at', 'result_release_at'))
+    single_choice = Question.objects.create(
+        course=question_bank_data['course'], stem='Saved choice',
+    )
+    Option.objects.create(question=single_choice, text='No', is_correct=False)
+    Option.objects.create(question=single_choice, text='Yes', is_correct=True)
+    other_choice = Question.objects.create(
+        course=question_bank_data['course'], stem='Other choice',
+    )
+    Option.objects.create(question=other_choice, text='Other', is_correct=True)
+    essay = Question.objects.create(
+        course=question_bank_data['course'], stem='Saved essay',
+        type=Question.Type.ESSAY, marking_note='Private rubric',
+    )
+    ExamItem.objects.bulk_create([
+        ExamItem(exam=exam, question=single_choice, question_version=1, points='1.00', position=0),
+        ExamItem(exam=exam, question=other_choice, question_version=1, points='1.00', position=1),
+        ExamItem(exam=exam, question=essay, question_version=1, points='2.00', position=2),
+    ])
+    teacher = APIClient()
+    teacher.force_authenticate(question_bank_data['teacher'])
+    assert teacher.post(f'/api/v1/exams/{exam.pk}/publish/').status_code == 200
+    pupil = APIClient()
+    pupil.force_authenticate(question_bank_data['pupil'])
+    started = pupil.post(f'/api/v1/exams/{exam.pk}/attempts/')
+    assert started.status_code == status.HTTP_201_CREATED
+    return exam, pupil, started.data
+
+
+@pytest.mark.django_db
+def test_attempt_read_returns_keyless_saved_answers_and_server_ack(question_bank_data):
+    _, pupil, started = create_open_attempt(question_bank_data)
+    choice_item, _, essay_item = started['items']
+    assert choice_item['answer'] is None
+    choice_response = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{choice_item['id']}/",
+        {'selected_option': choice_item['options'][1]['id'], 'expected_version': 0},
+        format='json',
+    )
+    assert choice_response.status_code == status.HTTP_200_OK
+    assert choice_response.data['version'] == 1
+    assert choice_response.data['saved_at']
+    essay_response = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{essay_item['id']}/",
+        {'essay_text': 'My private response', 'expected_version': 0},
+        format='json',
+    )
+    assert essay_response.status_code == status.HTTP_200_OK
+    loaded = pupil.get(f"/api/v1/attempts/{started['id']}/")
+    assert loaded.status_code == status.HTTP_200_OK
+    assert loaded.data['items'][0]['answer']['selected_option'] == choice_item['options'][1]['id']
+    assert loaded.data['items'][2]['answer']['essay_text'] == 'My private response'
+    assert not contains_private_pupil_field(loaded.data)
+
+    update = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{choice_item['id']}/",
+        {'selected_option': choice_item['options'][0]['id'], 'expected_version': 1},
+        format='json',
+    )
+    assert update.status_code == status.HTTP_200_OK
+    assert update.data['version'] == 2
+    stale = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{choice_item['id']}/",
+        {'selected_option': choice_item['options'][1]['id'], 'expected_version': 1},
+        format='json',
+    )
+    assert stale.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+def test_answer_rejects_foreign_option_expired_and_foreign_attempt(question_bank_data):
+    _, pupil, started = create_open_attempt(question_bank_data)
+    choice_item, other_choice_item, _ = started['items']
+    foreign_option = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{choice_item['id']}/",
+        {'selected_option': other_choice_item['options'][0]['id'], 'expected_version': 0},
+        format='json',
+    )
+    assert foreign_option.status_code == status.HTTP_400_BAD_REQUEST
+    wrong_kind = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{choice_item['id']}/",
+        {'essay_text': 'not choice', 'expected_version': 0},
+        format='json',
+    )
+    assert wrong_kind.status_code == status.HTTP_400_BAD_REQUEST
+    Attempt.objects.filter(pk=started['id']).update(state=Attempt.State.FINISHED)
+    finished = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{choice_item['id']}/",
+        {'selected_option': choice_item['options'][0]['id'], 'expected_version': 0},
+        format='json',
+    )
+    assert finished.status_code == status.HTTP_400_BAD_REQUEST
+    now = timezone.now()
+    Attempt.objects.filter(pk=started['id']).update(
+        state=Attempt.State.ACTIVE,
+        started_at=now - timedelta(minutes=2),
+        expires_at=now - timedelta(seconds=1),
+    )
+    expired = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{choice_item['id']}/",
+        {'selected_option': choice_item['options'][0]['id'], 'expected_version': 0},
+        format='json',
+    )
+    assert expired.status_code == status.HTTP_400_BAD_REQUEST
+
+    other_pupil = User.objects.create_user(
+        username='other-attempt-pupil', password='safe-test-password', role=User.Role.PUPIL,
+    )
+    foreign_client = APIClient()
+    foreign_client.force_authenticate(other_pupil)
+    forbidden = foreign_client.put(
+        f"/api/v1/attempts/{started['id']}/answers/{choice_item['id']}/",
+        {'selected_option': choice_item['options'][0]['id'], 'expected_version': 0},
+        format='json',
+    )
+    assert forbidden.status_code == status.HTTP_404_NOT_FOUND
+
+
+def create_objective_attempt(question_bank_data):
+    exam = create_draft_exam(question_bank_data)
+    now = timezone.now()
+    exam.opens_at = now - timedelta(minutes=1)
+    exam.closes_at = now + timedelta(hours=2)
+    exam.result_release_at = exam.closes_at
+    exam.save(update_fields=('opens_at', 'closes_at', 'result_release_at'))
+    question = Question.objects.create(
+        course=question_bank_data['course'], stem='Objective finish',
+    )
+    Option.objects.create(question=question, text='Wrong', is_correct=False)
+    Option.objects.create(question=question, text='Right', is_correct=True)
+    ExamItem.objects.create(
+        exam=exam, question=question, question_version=1,
+        points='3.00', position=0,
+    )
+    teacher = APIClient()
+    teacher.force_authenticate(question_bank_data['teacher'])
+    assert teacher.post(f'/api/v1/exams/{exam.pk}/publish/').status_code == 200
+    pupil = APIClient()
+    pupil.force_authenticate(question_bank_data['pupil'])
+    started = pupil.post(f'/api/v1/exams/{exam.pk}/attempts/')
+    assert started.status_code == status.HTTP_201_CREATED
+    return pupil, started.data
+
+
+@pytest.mark.django_db
+def test_finish_scores_saved_objective_answers_and_is_idempotent(question_bank_data):
+    pupil, started = create_objective_attempt(question_bank_data)
+    item = started['items'][0]
+    saved = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{item['id']}/",
+        {'selected_option': item['options'][1]['id'], 'expected_version': 0},
+        format='json',
+    )
+    assert saved.status_code == status.HTTP_200_OK
+    injected = pupil.post(
+        f"/api/v1/attempts/{started['id']}/finish/",
+        {'score': '999.00', 'answer': item['options'][0]['id']},
+        format='json',
+    )
+    assert injected.status_code == status.HTTP_400_BAD_REQUEST
+    first = pupil.post(f"/api/v1/attempts/{started['id']}/finish/")
+    second = pupil.post(f"/api/v1/attempts/{started['id']}/finish/")
+    assert first.status_code == second.status_code == status.HTTP_200_OK
+    assert first.data == second.data
+    assert first.data['status'] == AttemptResult.Status.FINALIZED
+    assert not contains_private_pupil_field(first.data)
+    result = AttemptResult.objects.get(attempt_id=started['id'])
+    assert result.objective_score == Decimal('3.00')
+    assert result.objective_max_score == Decimal('3.00')
+    assert Attempt.objects.get(pk=started['id']).state == Attempt.State.FINISHED
+
+
+@pytest.mark.django_db
+def test_finish_expired_attempt_uses_only_saved_answers_and_marks_essay_pending(question_bank_data):
+    _, pupil, started = create_open_attempt(question_bank_data)
+    choice_item, _, _ = started['items']
+    assert pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{choice_item['id']}/",
+        {'selected_option': choice_item['options'][1]['id'], 'expected_version': 0},
+        format='json',
+    ).status_code == status.HTTP_200_OK
+    now = timezone.now()
+    Attempt.objects.filter(pk=started['id']).update(
+        started_at=now - timedelta(minutes=2),
+        expires_at=now - timedelta(seconds=1),
+    )
+    late_answer = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{choice_item['id']}/",
+        {'selected_option': choice_item['options'][0]['id'], 'expected_version': 1},
+        format='json',
+    )
+    assert late_answer.status_code == status.HTTP_400_BAD_REQUEST
+    finish = pupil.post(f"/api/v1/attempts/{started['id']}/finish/")
+    assert finish.status_code == status.HTTP_200_OK
+    assert finish.data['status'] == AttemptResult.Status.PENDING_MANUAL
+    result = AttemptResult.objects.get(attempt_id=started['id'])
+    assert result.objective_score == Decimal('1.00')
+    assert result.objective_max_score == Decimal('2.00')
+
+
+def parallel_finish(*, barrier, user_id, attempt_id):
+    connections.close_all()
+    try:
+        client = APIClient()
+        client.force_authenticate(User.objects.get(pk=user_id))
+        barrier.wait(timeout=10)
+        response = client.post(f'/api/v1/attempts/{attempt_id}/finish/')
+        return response.status_code, response.data
+    finally:
+        connections.close_all()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != 'postgresql', reason='PostgreSQL lock testi.')
+def test_parallel_finish_creates_one_result(question_bank_data):
+    pupil, started = create_objective_attempt(question_bank_data)
+    barrier = Barrier(2)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [future.result(timeout=30) for future in [
+            executor.submit(
+                parallel_finish,
+                barrier=barrier,
+                user_id=question_bank_data['pupil'].pk,
+                attempt_id=started['id'],
+            )
+            for _ in range(2)
+        ]]
+    assert [code for code, _ in results] == [status.HTTP_200_OK] * 2
+    assert results[0][1] == results[1][1]
+    assert AttemptResult.objects.filter(attempt_id=started['id']).count() == 1
+
+
+@pytest.mark.django_db
+def test_essay_grading_finalizes_total_after_release_and_uses_exam_gradebook(question_bank_data):
+    exam, pupil, started = create_open_attempt(question_bank_data)
+    choice_item, _, essay_item = started['items']
+    assert pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{choice_item['id']}/",
+        {'selected_option': choice_item['options'][1]['id'], 'expected_version': 0},
+        format='json',
+    ).status_code == status.HTTP_200_OK
+    assert pupil.post(f"/api/v1/attempts/{started['id']}/finish/").data['status'] == 'pending_manual'
+
+    teacher = APIClient()
+    teacher.force_authenticate(question_bank_data['teacher'])
+    grade_url = f"/api/v1/attempts/{started['id']}/items/{essay_item['id']}/grade/"
+    assert teacher.put(
+        grade_url, {'points': '2.00', 'feedback': 'Good', 'expected_version': 0},
+        format='json',
+    ).status_code == status.HTTP_404_NOT_FOUND
+    TeachingAssignment.objects.filter(
+        course=question_bank_data['course'], teacher=question_bank_data['teacher'],
+    ).update(can_grade=True)
+    too_high = teacher.put(
+        grade_url, {'points': '2.01', 'feedback': '', 'expected_version': 0},
+        format='json',
+    )
+    assert too_high.status_code == status.HTTP_400_BAD_REQUEST
+    graded = teacher.put(
+        grade_url, {'points': '2.00', 'feedback': 'Good', 'expected_version': 0},
+        format='json',
+    )
+    assert graded.status_code == status.HTTP_200_OK
+    assert graded.data['version'] == 1
+    regraded = teacher.put(
+        grade_url, {'points': '1.50', 'feedback': 'Updated', 'expected_version': 1},
+        format='json',
+    )
+    assert regraded.status_code == status.HTTP_200_OK
+    assert regraded.data['version'] == 2
+    grading_read = teacher.get(f"/api/v1/attempts/{started['id']}/grading/")
+    assert grading_read.status_code == status.HTTP_200_OK
+    assert grading_read.data['essay_items'][0]['max_score'] == Decimal('2.00')
+    assert len(grading_read.data['essay_items'][0]['audit']) == 2
+    grade = AttemptGrade.objects.get(attempt_item_id=essay_item['id'])
+    assert AttemptGradeAudit.objects.filter(grade=grade).count() == 2
+    result = AttemptResult.objects.get(attempt_id=started['id'])
+    assert result.status == AttemptResult.Status.FINALIZED
+    assert result.objective_score == Decimal('1.00')
+    assert result.total_score == Decimal('2.50')
+    assert result.total_max_score == Decimal('4.00')
+
+    result_url = f"/api/v1/attempts/{started['id']}/result/"
+    assert pupil.get(result_url).status_code == status.HTTP_404_NOT_FOUND
+    now = timezone.now()
+    exam.opens_at = now - timedelta(minutes=3)
+    exam.closes_at = now - timedelta(minutes=2)
+    exam.result_release_at = now - timedelta(minutes=1)
+    exam.save(update_fields=('opens_at', 'closes_at', 'result_release_at'))
+    released = pupil.get(result_url)
+    assert released.status_code == status.HTTP_200_OK
+    assert released.data['total_score'] == Decimal('2.50')
+    assert pupil.get('/api/v1/me/exam-gradebook/').data[0]['source_kind'] == 'exam'
+    teacher_book = teacher.get(f'/api/v1/courses/{exam.course_id}/exam-gradebook/')
+    assert teacher_book.status_code == status.HTTP_200_OK
+    assert len(teacher_book.data) == 1
+    assert teacher_book.data[0]['source_kind'] == 'exam'
+
+
+@pytest.mark.django_db
+def test_pending_essay_result_hides_total_and_other_scopes_are_rejected(question_bank_data):
+    exam, pupil, started = create_open_attempt(question_bank_data)
+    assert pupil.post(f"/api/v1/attempts/{started['id']}/finish/").status_code == status.HTTP_200_OK
+    now = timezone.now()
+    exam.opens_at = now - timedelta(minutes=3)
+    exam.closes_at = now - timedelta(minutes=2)
+    exam.result_release_at = now - timedelta(minutes=1)
+    exam.save(update_fields=('opens_at', 'closes_at', 'result_release_at'))
+    response = pupil.get(f"/api/v1/attempts/{started['id']}/result/")
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data['status'] == AttemptResult.Status.PENDING_MANUAL
+    assert response.data['total_score'] is None
+    assert response.data['total_max_score'] is None
+
+    other_teacher = APIClient()
+    other_teacher.force_authenticate(question_bank_data['other_teacher'])
+    assert other_teacher.get(f'/api/v1/attempts/{started["id"]}/grading/').status_code == status.HTTP_404_NOT_FOUND
+    other_pupil = User.objects.create_user(
+        username='result-other-pupil', password='safe-test-password', role=User.Role.PUPIL,
+    )
+    other_client = APIClient()
+    other_client.force_authenticate(other_pupil)
+    assert other_client.get(f'/api/v1/attempts/{started["id"]}/result/').status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.django_db
+def test_expired_attempt_read_finalizes_and_sweep_is_idempotent(question_bank_data):
+    pupil, started = create_objective_attempt(question_bank_data)
+    now = timezone.now()
+    Attempt.objects.filter(pk=started['id']).update(
+        started_at=now - timedelta(minutes=2),
+        expires_at=now - timedelta(seconds=1),
+    )
+    read = pupil.get(f"/api/v1/attempts/{started['id']}/")
+    assert read.status_code == status.HTTP_200_OK
+    assert read.data['state'] == Attempt.State.FINISHED
+    assert AttemptResult.objects.filter(attempt_id=started['id']).count() == 1
+
+    _, second_started = create_objective_attempt(question_bank_data)
+    Attempt.objects.filter(pk=second_started['id']).update(
+        started_at=now - timedelta(minutes=2),
+        expires_at=now - timedelta(seconds=1),
+    )
+    assert finalize_expired_attempts.run() == 1
+    assert finalize_expired_attempts.run() == 0
+    assert AttemptResult.objects.filter(attempt_id=second_started['id']).count() == 1
+
+
+def parallel_expiry_sweep(*, barrier):
+    connections.close_all()
+    try:
+        barrier.wait(timeout=10)
+        return finalize_expired_attempts.run()
+    finally:
+        connections.close_all()
+
+
+def parallel_expired_finish(*, barrier, user_id, attempt_id):
+    connections.close_all()
+    try:
+        client = APIClient()
+        client.force_authenticate(User.objects.get(pk=user_id))
+        barrier.wait(timeout=10)
+        return client.post(f'/api/v1/attempts/{attempt_id}/finish/').status_code
+    finally:
+        connections.close_all()
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.skipif(connection.vendor != 'postgresql', reason='PostgreSQL lock testi.')
+def test_expiry_sweep_and_api_finish_share_one_finalization(question_bank_data):
+    _, started = create_objective_attempt(question_bank_data)
+    now = timezone.now()
+    Attempt.objects.filter(pk=started['id']).update(
+        started_at=now - timedelta(minutes=2),
+        expires_at=now - timedelta(seconds=1),
+    )
+    barrier = Barrier(2)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        sweep = executor.submit(parallel_expiry_sweep, barrier=barrier)
+        finish = executor.submit(
+            parallel_expired_finish,
+            barrier=barrier,
+            user_id=question_bank_data['pupil'].pk,
+            attempt_id=started['id'],
+        )
+        assert sweep.result(timeout=30) in (0, 1)
+        assert finish.result(timeout=30) == status.HTTP_200_OK
+    assert AttemptResult.objects.filter(attempt_id=started['id']).count() == 1
+
+
+@pytest.mark.django_db
+def test_p072_attempt_lifecycle_contract_from_start_to_released_result(question_bank_data):
+    pupil, started = create_objective_attempt(question_bank_data)
+    attempt = Attempt.objects.select_related('exam').get(pk=started['id'])
+    second_start = pupil.post(f'/api/v1/exams/{attempt.exam_id}/attempts/')
+    assert second_start.status_code == status.HTTP_201_CREATED
+    assert second_start.data['id'] == started['id']
+
+    item = started['items'][0]
+    saved = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{item['id']}/",
+        {'selected_option': item['options'][1]['id'], 'expected_version': 0},
+        format='json',
+    )
+    assert saved.status_code == status.HTTP_200_OK
+    stale = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{item['id']}/",
+        {'selected_option': item['options'][0]['id'], 'expected_version': 0},
+        format='json',
+    )
+    assert stale.status_code == status.HTTP_400_BAD_REQUEST
+
+    now = timezone.now()
+    Attempt.objects.filter(pk=started['id']).update(
+        started_at=now - timedelta(minutes=2),
+        expires_at=now - timedelta(seconds=1),
+    )
+    expired_write = pupil.put(
+        f"/api/v1/attempts/{started['id']}/answers/{item['id']}/",
+        {'selected_option': item['options'][0]['id'], 'expected_version': 1},
+        format='json',
+    )
+    assert expired_write.status_code == status.HTTP_400_BAD_REQUEST
+    assert finalize_expired_attempts.run() == 1
+
+    first_finish = pupil.post(f"/api/v1/attempts/{started['id']}/finish/")
+    second_finish = pupil.post(f"/api/v1/attempts/{started['id']}/finish/")
+    assert first_finish.status_code == second_finish.status_code == status.HTTP_200_OK
+    assert first_finish.data == second_finish.data
+
+    attempt.exam.opens_at = now - timedelta(minutes=3)
+    attempt.exam.closes_at = now - timedelta(minutes=2)
+    attempt.exam.result_release_at = now - timedelta(minutes=1)
+    attempt.exam.save(update_fields=('opens_at', 'closes_at', 'result_release_at'))
+    result = pupil.get(f"/api/v1/attempts/{started['id']}/result/")
+    assert result.status_code == status.HTTP_200_OK
+    assert result.data['total_score'] == Decimal('3.00')
+    payloads = [started, second_start.data, pupil.get(f"/api/v1/attempts/{started['id']}/").data]
+    assert all(not contains_private_pupil_field(payload) for payload in payloads)
 
