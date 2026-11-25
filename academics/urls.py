@@ -7,6 +7,8 @@ from accounts.views import (
     CsrfCookieView,
     ChangePasswordView,
     CurrentUserView,
+    PupilDashboardView,
+    TeacherDashboardView,
     LoginView,
     LogoutView,
 )
@@ -45,6 +47,12 @@ urlpatterns = [
         name="auth-token-refresh",
     ),
     path("me/", CurrentUserView.as_view(), name="current-user"),
+    path("me/dashboard/", PupilDashboardView.as_view(), name="pupil-dashboard"),
+    path(
+        "teaching/dashboard/",
+        TeacherDashboardView.as_view(),
+        name="teacher-dashboard",
+    ),
     path(
         "me/change-password/",
         ChangePasswordView.as_view(),

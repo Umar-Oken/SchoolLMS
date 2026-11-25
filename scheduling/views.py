@@ -1,5 +1,6 @@
 from collections import Counter
 
+from django.conf import settings
 from django.db.models import Exists, OuterRef, Prefetch, Q
 from rest_framework.generics import (
     GenericAPIView,
@@ -23,6 +24,13 @@ from scheduling.models import (
     LessonSession,
     Room,
     WeeklySlot,
+)
+from scheduling.cache import (
+    CACHE_MISS,
+    get_timetable_payload,
+    set_timetable_payload,
+    timetable_cache_key,
+    timetable_version,
 )
 from scheduling.serializers import (
     AttendanceInputSerializer,
@@ -136,6 +144,48 @@ class WeeklySlotDetailView(RetrieveUpdateAPIView):
 class ScheduleView(ListAPIView):
     serializer_class = LessonSessionReadSerializer
     permission_classes = (IsAuthenticated, MustChangePasswordPermission)
+
+    def _course_scope_ids(self, from_date, to_date):
+        user = self.request.user
+        if user.role == User.Role.TEACHER:
+            return TeachingAssignment.objects.filter(
+                teacher=user,
+                start_date__lte=to_date,
+            ).filter(
+                Q(end_date__isnull=True) | Q(end_date__gte=from_date),
+            ).values_list('course_id', flat=True)
+        if user.role == User.Role.PUPIL:
+            return Enrollment.objects.filter(
+                pupil=user,
+                start_date__lte=to_date,
+            ).filter(
+                Q(end_date__isnull=True) | Q(end_date__gte=from_date),
+            ).values_list('course_id', flat=True)
+        return []
+
+    def list(self, request, *args, **kwargs):
+        window = ScheduleWindowSerializer(data=request.query_params)
+        window.is_valid(raise_exception=True)
+        from_date = window.validated_data['from_date']
+        to_date = window.validated_data['to_date']
+        course_ids = list(self._course_scope_ids(from_date, to_date))
+        key = timetable_cache_key(
+            user=request.user,
+            course_ids=course_ids,
+            from_date=from_date,
+            to_date=to_date,
+            version=timetable_version(),
+        )
+        payload = get_timetable_payload(key)
+        if payload is not CACHE_MISS:
+            return Response(payload)
+
+        payload = LessonSessionReadSerializer(
+            self.get_queryset(),
+            many=True,
+        ).data
+        set_timetable_payload(key, payload, settings.TIMETABLE_CACHE_TTL)
+        return Response(payload)
 
     def get_queryset(self):
         window = ScheduleWindowSerializer(data=self.request.query_params)

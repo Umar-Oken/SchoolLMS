@@ -857,8 +857,8 @@ def test_course_list_is_scoped_to_pupil_enrollments_and_has_explicit_fields(
     response = client.get('/api/v1/courses/')
 
     assert response.status_code == status.HTTP_200_OK
-    assert len(response.data) == 1
-    course = response.data[0]
+    assert response.data['count'] == 1
+    course = response.data['results'][0]
     assert course['id'] == course_api_data['course_a'].pk
     assert set(course) == {'id', 'subject', 'school_class', 'teacher_display', 'year'}
     assert course['subject'] == {'code': 'API-MATH', 'title': 'Matematika'}
@@ -881,9 +881,44 @@ def test_pupil_cannot_read_another_classes_course_by_list_or_detail(course_api_d
 
     assert list_response.status_code == status.HTTP_200_OK
     assert course_api_data['course_b'].pk not in {
-        item['id'] for item in list_response.data
+        item['id'] for item in list_response.data['results']
     }
     assert detail_response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.django_db
+def test_course_filters_run_inside_scope_and_page_size_is_capped(course_api_data):
+    pupil = course_api_data['pupil_a']
+    course = course_api_data['course_a']
+    for index in range(100):
+        extra = CourseOffering.objects.create(
+            school_class=course.school_class,
+            subject=Subject.objects.create(
+                code=f'PAGE-{index}', title=f'Page subject {index}',
+            ),
+        )
+        Enrollment.objects.create(
+            pupil=pupil, course=extra, start_date=timezone.localdate(),
+        )
+
+    client = APIClient()
+    client.force_authenticate(user=pupil)
+    response = client.get('/api/v1/courses/', {'page_size': '10000'})
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data['count'] == 101
+    assert len(response.data['results']) == 100
+    foreign_subject = Subject.objects.create(code='FOREIGN-PAGE', title='Foreign')
+    CourseOffering.objects.create(
+        school_class=course_api_data['course_b'].school_class,
+        subject=foreign_subject,
+    )
+    foreign = client.get(
+        '/api/v1/courses/',
+        {'subject': str(foreign_subject.pk), 'ordering': 'archived_at'},
+    )
+    assert foreign.status_code == status.HTTP_200_OK
+    assert foreign.data['count'] == 0
 
 
 @pytest.mark.django_db
@@ -900,7 +935,7 @@ def test_teacher_course_list_and_detail_are_assignment_scoped(course_api_data):
     )
 
     assert list_response.status_code == status.HTTP_200_OK
-    assert [item['id'] for item in list_response.data] == [
+    assert [item['id'] for item in list_response.data['results']] == [
         course_api_data['course_a'].pk
     ]
     assert own_detail.status_code == status.HTTP_200_OK
@@ -933,8 +968,8 @@ def test_course_list_and_detail_reject_ids_from_other_users(
     swapped_detail = client.get(f'/api/v1/courses/{other_course_id}/')
 
     assert list_response.status_code == status.HTTP_200_OK
-    assert own_course_id in {item['id'] for item in list_response.data}
-    assert other_course_id not in {item['id'] for item in list_response.data}
+    assert own_course_id in {item['id'] for item in list_response.data['results']}
+    assert other_course_id not in {item['id'] for item in list_response.data['results']}
     assert own_detail.status_code == status.HTTP_200_OK
     assert swapped_detail.status_code == status.HTTP_404_NOT_FOUND
 
@@ -957,7 +992,7 @@ def test_pupil_can_read_course_with_closed_enrollment_but_cannot_write(
     client.force_authenticate(user=pupil)
     read_request = SimpleNamespace(user=pupil, method='GET')
 
-    assert client.get('/api/v1/courses/').data[0]['id'] == course.pk
+    assert client.get('/api/v1/courses/').data['results'][0]['id'] == course.pk
     assert client.get(f'/api/v1/courses/{course.pk}/').status_code == status.HTTP_200_OK
     assert permission.has_object_permission(read_request, None, course)
     assert not permission.has_object_permission(write_request, None, course)
@@ -986,7 +1021,7 @@ def test_teacher_history_is_readable_but_closed_or_non_grading_assignment_cannot
     client.force_authenticate(user=teacher)
     read_request = SimpleNamespace(user=teacher, method='GET')
 
-    assert client.get('/api/v1/courses/').data[0]['id'] == course.pk
+    assert client.get('/api/v1/courses/').data['results'][0]['id'] == course.pk
     assert client.get(f'/api/v1/courses/{course.pk}/').status_code == status.HTTP_200_OK
     assert permission.has_object_permission(read_request, None, course)
     assert not permission.has_object_permission(write_request, None, course)
@@ -1088,7 +1123,7 @@ def test_login_serializer_rejects_missing_fields(csrf_client):
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert set(response.data) == {'username', 'password'}
+    assert set(response.data['fields']) == {'username', 'password'}
 
 
 @pytest.mark.django_db
@@ -1141,7 +1176,7 @@ def test_current_user_profile_rejects_forbidden_fields(login_user, forbidden_dat
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert set(response.data) == set(forbidden_data)
+    assert set(response.data['fields']) == set(forbidden_data)
     login_user.refresh_from_db()
     assert login_user.role == User.Role.PUPIL
     assert login_user.username == 'login-pupil'
@@ -1244,7 +1279,7 @@ def test_change_password_rejects_invalid_passwords(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert invalid_field in response.data
+    assert invalid_field in response.data['fields']
     login_user.refresh_from_db()
     assert login_user.check_password('synthetic-valid-password')
     assert not login_user.must_change_password
@@ -1480,9 +1515,9 @@ def test_academic_year_aggregate_rejects_duplicate_or_out_of_bounds_terms(
     )
 
     assert duplicate_response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'terms' in duplicate_response.data
+    assert 'terms' in duplicate_response.data['fields']
     assert bounds_response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'terms' in bounds_response.data
+    assert 'terms' in bounds_response.data['fields']
     assert AcademicYear.objects.count() == 1
 
 
@@ -1595,7 +1630,7 @@ def test_school_class_catalog_rejects_duplicate_and_preserves_year_identity(
         format='json',
     )
     assert duplicate.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'section' in duplicate.data
+    assert 'section' in duplicate.data['fields']
     invalid_grade = client.post(
         '/api/v1/admin/classes/',
         {
@@ -1606,7 +1641,7 @@ def test_school_class_catalog_rejects_duplicate_and_preserves_year_identity(
         format='json',
     )
     assert invalid_grade.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'grade_level' in invalid_grade.data
+    assert 'grade_level' in invalid_grade.data['fields']
 
     moved = client.patch(
         f'/api/v1/admin/classes/{historic_class.pk}/',
@@ -1684,7 +1719,7 @@ def test_subject_catalog_requires_operator_and_rejects_duplicate_code(
         format='json',
     )
     assert duplicate.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'code' in duplicate.data
+    assert 'code' in duplicate.data['fields']
 
     updated = client.patch(
         f"/api/v1/admin/subjects/{created.data['id']}/",
@@ -2117,7 +2152,7 @@ def test_class_membership_api_rejects_non_operator_and_non_pupil_targets(
     )
 
     assert invalid_target.status_code == status.HTTP_400_BAD_REQUEST
-    assert "pupil" in invalid_target.data
+    assert "pupil" in invalid_target.data['fields']
 
 
 @pytest.mark.django_db

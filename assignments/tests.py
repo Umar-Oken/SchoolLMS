@@ -13,6 +13,7 @@ from django.db import (
     connections,
     transaction,
 )
+from django.test.utils import CaptureQueriesContext
 from django.db.models.deletion import ProtectedError
 from django.utils.dateparse import parse_datetime
 from django.utils import timezone
@@ -239,6 +240,38 @@ def create_published_assignment_for_pupil(assignment_model_data, pupil=None):
         published_at=timezone.now(),
         **valid_assignment_fields(),
     )
+    return assignment
+
+
+def create_queue_submissions(assignment_model_data, count):
+    assignment = create_published_assignment_for_pupil(assignment_model_data)
+    pupils = [assignment_model_data['pupil']]
+    pupils.extend(
+        User.objects.create_user(
+            username=f'queue-pupil-{number}',
+            password='safe-test-password',
+            role=User.Role.PUPIL,
+            first_name=f'Queue {number}',
+        )
+        for number in range(1, count)
+    )
+    for pupil in pupils[1:]:
+        Enrollment.objects.create(
+            pupil=pupil,
+            course=assignment.topic.course,
+            start_date=timezone.localdate() - timedelta(days=1),
+        )
+    for pupil in pupils:
+        submission = Submission.objects.create(
+            assignment=assignment,
+            pupil=pupil,
+        )
+        SubmissionRevision.objects.create(
+            submission=submission,
+            revision_number=1,
+            submitted_version=1,
+            submitted_text='Synthetic queue answer',
+        )
     return assignment
 
 
@@ -1089,10 +1122,10 @@ def test_pupil_assignment_list_and_detail_are_limited_to_enrolled_published_scop
     )
 
     assert response.status_code == status.HTTP_200_OK
-    assert [item['id'] for item in response.data] == [assignment.pk]
-    assert response.data[0]['course'] == topic.course_id
-    assert response.data[0]['instructions'] == assignment.instructions
-    assert len(response.data[0]['rubric']) == 1
+    assert [item['id'] for item in response.data['results']] == [assignment.pk]
+    assert response.data['results'][0]['course'] == topic.course_id
+    assert response.data['results'][0]['instructions'] == assignment.instructions
+    assert len(response.data['results'][0]['rubric']) == 1
     assert client.get(
         f'/api/v1/assignments/{assignment.pk}/',
     ).status_code == status.HTTP_200_OK
@@ -1113,7 +1146,7 @@ def test_pupil_assignment_list_and_detail_are_limited_to_enrolled_published_scop
         f'/api/v1/assignments/?course={other_topic.course_id}',
     )
     assert wrong_course_response.status_code == status.HTTP_200_OK
-    assert wrong_course_response.data == []
+    assert wrong_course_response.data['results'] == []
     assert client.get(
         '/api/v1/assignments/?course=not-an-id',
     ).status_code == status.HTTP_400_BAD_REQUEST
@@ -2847,7 +2880,7 @@ def test_pupil_gradebook_distinguishes_statuses_and_selects_latest_published(
     response = client.get('/api/v1/me/gradebook/')
 
     assert response.status_code == status.HTTP_200_OK
-    entries = {item['title']: item for item in response.data}
+    entries = {item['title']: item for item in response.data['results']}
     assert entries['Missing']['status'] == 'missing'
     assert entries['Missing']['current_grade'] is None
     assert entries['Ungraded']['status'] == 'ungraded'
@@ -2865,14 +2898,14 @@ def test_pupil_gradebook_distinguishes_statuses_and_selects_latest_published(
         f'/api/v1/me/gradebook/?course={topic.course_id}&term={topic.term_id}',
     )
     assert filtered.status_code == status.HTTP_200_OK
-    assert len(filtered.data) == len(response.data)
+    assert filtered.data['count'] == response.data['count']
     assert client.get('/api/v1/me/gradebook/?course=nope').status_code == 400
     assert client.get(
         f'/api/v1/me/gradebook/?course={assignment_model_data["other_topic"].course_id}',
-    ).data == []
+    ).data['results'] == []
     assert all(
         item['course_id'] == topic.course_id
-        for item in filtered.data
+        for item in filtered.data['results']
     )
 
 
@@ -2905,10 +2938,10 @@ def test_pupil_gradebook_is_scoped_to_authenticated_pupil(
     response = other_client.get('/api/v1/me/gradebook/')
 
     assert response.status_code == status.HTTP_200_OK
-    assert len(response.data) == 1
-    assert response.data[0]['assignment_id'] == assignment.pk
-    assert response.data[0]['status'] == 'missing'
-    assert response.data[0]['current_grade'] is None
+    assert response.data['count'] == 1
+    assert response.data['results'][0]['assignment_id'] == assignment.pk
+    assert response.data['results'][0]['status'] == 'missing'
+    assert response.data['results'][0]['current_grade'] is None
 
     teacher_client = APIClient()
     teacher_client.force_authenticate(user=assignment_model_data['teacher'])
@@ -2935,8 +2968,8 @@ def test_teacher_course_gradebook_and_submission_queue_are_scoped_and_minimal(
 
     pending = teacher_client.get(course_url)
     assert pending.status_code == status.HTTP_200_OK
-    assert len(pending.data) == 1
-    row = pending.data[0]
+    assert pending.data['count'] == 1
+    row = pending.data['results'][0]
     assert row['status'] == 'submitted'
     assert row['pupil'] == {
         'id': assignment_model_data['pupil'].pk,
@@ -2955,7 +2988,7 @@ def test_teacher_course_gradebook_and_submission_queue_are_scoped_and_minimal(
         format='json',
     )
     assert draft.status_code == status.HTTP_200_OK
-    draft_row = teacher_client.get(assignment_url).data[0]
+    draft_row = teacher_client.get(assignment_url).data['results'][0]
     assert draft_row['status'] == 'draft'
     assert draft_row['latest_revision']['grade']['state'] == Grade.State.DRAFT
 
@@ -2965,7 +2998,7 @@ def test_teacher_course_gradebook_and_submission_queue_are_scoped_and_minimal(
         format='json',
     )
     assert published.status_code == status.HTTP_200_OK
-    graded = teacher_client.get(course_url).data[0]
+    graded = teacher_client.get(course_url).data['results'][0]
     assert graded['status'] == 'graded'
     assert graded['latest_revision']['grade']['state'] == Grade.State.PUBLISHED
     assert graded['latest_revision']['grade']['total'] == '8.00'
@@ -2981,6 +3014,104 @@ def test_teacher_course_gradebook_and_submission_queue_are_scoped_and_minimal(
     pupil_client.force_authenticate(user=assignment_model_data['pupil'])
     assert pupil_client.get(course_url).status_code == 403
     assert pupil_client.get(assignment_url).status_code == 403
+
+
+@pytest.mark.django_db
+def test_teacher_gradebook_query_count_is_constant_from_five_to_fifty_rows(
+    assignment_model_data,
+):
+    assignment = create_queue_submissions(assignment_model_data, 5)
+    client = APIClient()
+    client.force_authenticate(user=assignment_model_data['teacher'])
+    url = f'/api/v1/courses/{assignment.topic.course_id}/gradebook/?page_size=100'
+
+    with CaptureQueriesContext(connection) as five_queries:
+        five_response = client.get(url)
+
+    assert five_response.status_code == status.HTTP_200_OK
+    assert five_response.data['count'] == 5
+    original_rows = {
+        row['pupil']['id']: row
+        for row in five_response.data['results']
+    }
+
+    for number in range(5, 50):
+        pupil = User.objects.create_user(
+            username=f'queue-pupil-{number}',
+            password='safe-test-password',
+            role=User.Role.PUPIL,
+            first_name=f'Queue {number}',
+        )
+        Enrollment.objects.create(
+            pupil=pupil,
+            course=assignment.topic.course,
+            start_date=timezone.localdate() - timedelta(days=1),
+        )
+        submission = Submission.objects.create(
+            assignment=assignment,
+            pupil=pupil,
+        )
+        SubmissionRevision.objects.create(
+            submission=submission,
+            revision_number=1,
+            submitted_version=1,
+            submitted_text='Synthetic queue answer',
+        )
+
+    with CaptureQueriesContext(connection) as fifty_queries:
+        fifty_response = client.get(url)
+
+    assert fifty_response.status_code == status.HTTP_200_OK
+    assert fifty_response.data['count'] == 50
+    assert len(five_queries) == len(fifty_queries) == 4
+    assert {
+        row['pupil']['id']: row
+        for row in fifty_response.data['results']
+        if row['pupil']['id'] in original_rows
+    } == original_rows
+
+
+@pytest.mark.django_db
+@pytest.mark.skipif(
+    connection.vendor != 'postgresql',
+    reason='P076 index plan requires PostgreSQL EXPLAIN.',
+)
+def test_assignment_topic_state_index_is_used_for_published_gradebook_scope(
+    assignment_model_data,
+):
+    topic = assignment_model_data['topic']
+    Assignment.objects.bulk_create([
+        Assignment(
+            topic=topic,
+            state=Assignment.State.DRAFT,
+            **{
+                **valid_assignment_fields(),
+                'title': f'Draft assignment {number}',
+                'instructions': 'Synthetic draft',
+            },
+        )
+        for number in range(500)
+    ])
+    published = Assignment.objects.create(
+        topic=topic,
+        state=Assignment.State.PUBLISHED,
+        published_at=timezone.now(),
+        **{
+            **valid_assignment_fields(),
+            'title': 'Published assignment',
+            'instructions': 'Synthetic published assignment',
+        },
+    )
+    with connection.cursor() as cursor:
+        cursor.execute('ANALYZE assignments_assignment')
+
+    plan = Assignment.objects.filter(
+        topic_id=topic.pk,
+        state=Assignment.State.PUBLISHED,
+    ).explain()
+
+    assert published.pk
+    assert 'assignments_topic_state_idx' in plan
 
 
 @pytest.mark.django_db(transaction=True)

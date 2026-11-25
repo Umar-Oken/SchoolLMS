@@ -181,11 +181,11 @@ def test_teacher_lists_own_course_topics_including_drafts(topic_api_data):
     )
 
     assert response.status_code == status.HTTP_200_OK
-    assert {item['id'] for item in response.data} == {
+    assert {item['id'] for item in response.data['results']} == {
         topic_api_data['draft'].pk,
         topic_api_data['published'].pk,
     }
-    assert set(response.data[0]) == {
+    assert set(response.data['results'][0]) == {
         'id',
         'course',
         'term',
@@ -216,7 +216,7 @@ def test_pupil_lists_only_published_topics_and_cannot_retrieve_draft(
     )
 
     assert list_response.status_code == status.HTTP_200_OK
-    assert [item['id'] for item in list_response.data] == [
+    assert [item['id'] for item in list_response.data['results']] == [
         topic_api_data['published'].pk
     ]
     assert draft_response.status_code == status.HTTP_404_NOT_FOUND
@@ -536,7 +536,7 @@ def test_archive_keeps_topic_row_and_removes_it_from_pupil_active_list(
     )
 
     assert list_response.status_code == status.HTTP_200_OK
-    assert list_response.data == []
+    assert list_response.data['results'] == []
     assert detail_response.status_code == status.HTTP_404_NOT_FOUND
 
 
@@ -565,7 +565,7 @@ def test_teacher_can_publish_topic_and_pupil_can_see_it(topic_api_data):
     )
 
     assert list_response.status_code == status.HTTP_200_OK
-    assert {item['id'] for item in list_response.data} == {
+    assert {item['id'] for item in list_response.data['results']} == {
         topic_api_data['draft'].pk,
         topic_api_data['published'].pk,
     }
@@ -635,7 +635,7 @@ def test_teacher_create_patch_publish_and_pupil_read_contract(topic_api_data):
     )
     assert hidden_draft.status_code == status.HTTP_404_NOT_FOUND
     assert created.data['id'] not in {
-        item['id'] for item in pupil_list_before_publish.data
+        item['id'] for item in pupil_list_before_publish.data['results']
     }
 
     patched = teacher_client.patch(
@@ -674,7 +674,7 @@ def test_teacher_create_patch_publish_and_pupil_read_contract(topic_api_data):
         if key != 'completion'
     } == published.data
     assert pupil_detail.data['completion'] is None
-    assert created.data['id'] in {item['id'] for item in pupil_list.data}
+    assert created.data['id'] in {item['id'] for item in pupil_list.data['results']}
 
 
 @pytest.mark.django_db

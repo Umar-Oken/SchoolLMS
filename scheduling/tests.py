@@ -7,8 +7,10 @@ from django.contrib.auth.models import Permission
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.core.management import call_command
 from django.db import IntegrityError, connections, transaction
+from django.test import override_settings
 from rest_framework import status
 from rest_framework.test import APIClient
+from unittest.mock import patch
 
 from accounts.models import User
 from academics.models import (
@@ -29,6 +31,15 @@ from scheduling.models import (
     WeeklySlot,
 )
 from scheduling.services import materialize_lessons
+
+
+TIMETABLE_TEST_CACHES = {
+    'default': {'BACKEND': 'django.core.cache.backends.dummy.DummyCache'},
+    'timetable': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'p077-timetable-tests',
+    },
+}
 
 
 @pytest.fixture
@@ -615,6 +626,123 @@ def test_schedule_api_scopes_sessions_to_teacher_assignments_and_pupil_enrollmen
     assert pupil_response.status_code == status.HTTP_200_OK
     assert [row['slot'] for row in pupil_response.data] == [own_slot.pk]
     assert LessonSession.objects.filter(slot=other_slot).exists()
+
+
+@pytest.mark.django_db
+@override_settings(CACHES=TIMETABLE_TEST_CACHES, TIMETABLE_CACHE_TTL=60)
+def test_timetable_cache_is_scoped_to_each_pupil(scheduling_data):
+    local_date = date(2026, 11, 16)
+    own_slot = WeeklySlot.objects.create(
+        course=scheduling_data['course'],
+        teacher=scheduling_data['assigned_teacher'],
+        room=scheduling_data['room'],
+        weekday=local_date.weekday(),
+        start_time=time(9),
+        end_time=time(9, 45),
+        valid_from=date(2026, 9, 1),
+    )
+    other_slot = WeeklySlot.objects.create(
+        course=scheduling_data['other_class_course'],
+        teacher=scheduling_data['other_teacher'],
+        room=scheduling_data['other_room'],
+        weekday=local_date.weekday(),
+        start_time=time(10),
+        end_time=time(10, 45),
+        valid_from=date(2026, 9, 1),
+    )
+    other_pupil = User.objects.create_user(
+        username='other-schedule-pupil',
+        password='safe-test-password',
+        role=User.Role.PUPIL,
+    )
+    Enrollment.objects.create(
+        pupil=scheduling_data['pupil'],
+        course=scheduling_data['course'],
+        start_date=date(2026, 9, 1),
+    )
+    Enrollment.objects.create(
+        pupil=other_pupil,
+        course=scheduling_data['other_class_course'],
+        start_date=date(2026, 9, 1),
+    )
+    materialize_lessons(from_date=local_date, to_date=local_date)
+    query = {'from': local_date.isoformat(), 'to': local_date.isoformat()}
+
+    first_client = APIClient()
+    first_client.force_authenticate(user=scheduling_data['pupil'])
+    second_client = APIClient()
+    second_client.force_authenticate(user=other_pupil)
+
+    first = first_client.get('/api/v1/schedule/', query)
+    second = second_client.get('/api/v1/schedule/', query)
+
+    assert first.status_code == second.status_code == status.HTTP_200_OK
+    assert [row['slot'] for row in first.data] == [own_slot.pk]
+    assert [row['slot'] for row in second.data] == [other_slot.pk]
+
+
+@pytest.mark.django_db
+@override_settings(CACHES=TIMETABLE_TEST_CACHES, TIMETABLE_CACHE_TTL=60)
+def test_schedule_exception_bumps_cache_version(scheduling_data):
+    session = create_attendance_session(scheduling_data)
+    Enrollment.objects.create(
+        pupil=scheduling_data['pupil'],
+        course=scheduling_data['course'],
+        start_date=date(2026, 9, 1),
+    )
+    query = {'from': '2026-11-16', 'to': '2026-11-16'}
+    pupil_client = APIClient()
+    pupil_client.force_authenticate(user=scheduling_data['pupil'])
+
+    cached = pupil_client.get('/api/v1/schedule/', query)
+    assert [row['id'] for row in cached.data] == [session.pk]
+
+    operator_client = APIClient()
+    operator_client.force_authenticate(user=scheduling_data['operator'])
+    changed = operator_client.post(
+        f'/api/v1/admin/lesson-sessions/{session.pk}/exception/',
+        {'action': 'cancelled', 'reason': 'Synthetic closure'},
+        format='json',
+    )
+    fresh = pupil_client.get('/api/v1/schedule/', query)
+
+    assert changed.status_code == status.HTTP_200_OK
+    assert fresh.data[0]['id'] == session.pk
+    assert fresh.data[0]['status'] == LessonSession.Status.CANCELLED
+
+
+@pytest.mark.django_db
+@override_settings(CACHES=TIMETABLE_TEST_CACHES, TIMETABLE_CACHE_TTL=60)
+def test_timetable_cache_outage_falls_back_to_database(scheduling_data):
+    session = create_attendance_session(scheduling_data)
+    Enrollment.objects.create(
+        pupil=scheduling_data['pupil'],
+        course=scheduling_data['course'],
+        start_date=date(2026, 9, 1),
+    )
+
+    class FailingCache:
+        def get(self, *args, **kwargs):
+            raise OSError('Redis unavailable')
+
+        def set(self, *args, **kwargs):
+            raise OSError('Redis unavailable')
+
+    class FailingCaches:
+        def __getitem__(self, alias):
+            assert alias == 'timetable'
+            return FailingCache()
+
+    client = APIClient()
+    client.force_authenticate(user=scheduling_data['pupil'])
+    with patch('scheduling.cache.caches', FailingCaches()):
+        response = client.get(
+            '/api/v1/schedule/',
+            {'from': '2026-11-16', 'to': '2026-11-16'},
+        )
+
+    assert response.status_code == status.HTTP_200_OK
+    assert [row['id'] for row in response.data] == [session.pk]
 
 
 @pytest.mark.django_db

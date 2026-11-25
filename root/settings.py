@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management.utils import get_random_secret_key
@@ -107,6 +108,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'drf_spectacular',
     'drf_spectacular_sidecar',
+    'django_filters',
 ]
 
 MIDDLEWARE = [
@@ -117,10 +119,12 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'root.middleware.RequestIdMiddleware',
 ]
 
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
+CSRF_FAILURE_VIEW = 'root.errors.csrf_failure'
 
 ROOT_URLCONF = 'root.urls'
 
@@ -152,6 +156,7 @@ REST_FRAMEWORK = {
         'rest_framework.permissions.IsAuthenticated',
         'accounts.permissions.MustChangePasswordPermission',
     ],
+    'EXCEPTION_HANDLER': 'root.errors.api_exception_handler',
 }
 
 SIMPLE_JWT = {
@@ -251,6 +256,41 @@ CELERY_RESULT_BACKEND = os.environ.get(
     'CELERY_RESULT_BACKEND',
     'redis://127.0.0.1:6379/1',
 )
+TIMETABLE_CACHE_URL = os.environ.get(
+    'TIMETABLE_CACHE_URL',
+    'redis://127.0.0.1:6379/2',
+)
+TIMETABLE_CACHE_TTL = int(os.environ.get('TIMETABLE_CACHE_TTL', '120'))
+if not 60 <= TIMETABLE_CACHE_TTL <= 300:
+    raise ImproperlyConfigured(
+        'TIMETABLE_CACHE_TTL must be between 60 and 300 seconds.',
+    )
+
+
+def _redis_origin(url):
+    parsed = urlsplit(url)
+    return parsed.scheme, parsed.hostname, parsed.port
+
+
+if (
+    APP_ENV == 'production'
+    and _redis_origin(TIMETABLE_CACHE_URL) == _redis_origin(CELERY_BROKER_URL)
+):
+    raise ImproperlyConfigured(
+        'TIMETABLE_CACHE_URL must use a Redis instance separate from '
+        'CELERY_BROKER_URL in production.',
+    )
+
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
+    },
+    'timetable': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': TIMETABLE_CACHE_URL,
+    },
+}
 CELERY_TASK_DEFAULT_QUEUE = 'default'
 CELERY_TASK_QUEUES = (
     Queue('default', routing_key='default'),

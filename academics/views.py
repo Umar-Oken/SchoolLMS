@@ -24,6 +24,7 @@ from rest_framework.permissions import (
     BasePermission,
     IsAuthenticated,
 )
+from rest_framework.filters import OrderingFilter
 from rest_framework.response import Response
 
 from accounts.models import User
@@ -37,6 +38,7 @@ from academics.models import (
     Subject,
     TeachingAssignment,
 )
+from academics.filters import CourseFilter
 from academics.serializers import (
     AcademicYearAggregateSerializer,
     AcademicYearCatalogReadSerializer,
@@ -57,6 +59,8 @@ from academics.serializers import (
     TeachingAssignmentReadSerializer,
 )
 from root.openapi import common_error_responses
+from django_filters.rest_framework import DjangoFilterBackend
+from root.pagination import StandardPageNumberPagination
 
 
 def pupil_course_scope(user, *, active_only=False):
@@ -185,7 +189,11 @@ class CourseReadQuerysetMixin:
     ),
 )
 class CourseListView(CourseReadQuerysetMixin, ListAPIView):
-    pass
+    filter_backends = (DjangoFilterBackend, OrderingFilter)
+    filterset_class = CourseFilter
+    ordering_fields = ('subject__title', 'school_class__grade_level')
+    ordering = ('school_class__grade_level', 'subject__title', 'pk')
+    pagination_class = StandardPageNumberPagination
 
 
 @extend_schema_view(

@@ -1,4 +1,4 @@
-from django.db.models import Prefetch
+from django.db.models import BooleanField, OuterRef, Prefetch, Q, Subquery
 from rest_framework.exceptions import ValidationError
 
 from academics.views import pupil_course_scope, teacher_course_scope
@@ -71,7 +71,13 @@ def pupil_gradebook_queryset(pupil, query_params):
     )
 
 
-def teacher_submission_queue_queryset(*, course_id=None, assignment_id=None):
+def teacher_submission_queue_queryset(
+    *,
+    course_id=None,
+    assignment_id=None,
+    late=None,
+    status=None,
+):
     revisions = (
         SubmissionRevision.objects.select_related(
             'grade',
@@ -112,6 +118,41 @@ def teacher_submission_queue_queryset(*, course_id=None, assignment_id=None):
         )
     if assignment_id is not None:
         queryset = queryset.filter(assignment_id=assignment_id)
+    if late is not None or status is not None:
+        latest_revision = SubmissionRevision.objects.filter(
+            submission_id=OuterRef('pk'),
+        ).order_by('-revision_number')
+        queryset = queryset.annotate(
+            latest_is_late=Subquery(
+                latest_revision.values('is_late')[:1],
+                output_field=BooleanField(),
+            ),
+            latest_returned_id=Subquery(
+                latest_revision.values('return_record__pk')[:1],
+            ),
+            latest_grade_state=Subquery(
+                latest_revision.values('grade__state')[:1],
+            ),
+        )
+        if late is not None:
+            queryset = queryset.filter(latest_is_late=late)
+        status_filters = {
+            'submitted': Q(
+                latest_returned_id__isnull=True,
+                latest_grade_state__isnull=True,
+            ),
+            'draft': Q(
+                latest_returned_id__isnull=True,
+                latest_grade_state='draft',
+            ),
+            'graded': Q(
+                latest_returned_id__isnull=True,
+                latest_grade_state='published',
+            ),
+            'returned': Q(latest_returned_id__isnull=False),
+        }
+        if status is not None:
+            queryset = queryset.filter(status_filters[status])
     return queryset
 
 

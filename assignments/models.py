@@ -32,6 +32,12 @@ class Assignment(models.Model):
     deadline_version = models.PositiveIntegerField(default=1)
 
     class Meta:
+        indexes = [
+            models.Index(
+                fields=('topic', 'state'),
+                name='assignments_topic_state_idx',
+            ),
+        ]
         constraints = [
             models.CheckConstraint(
                 condition=Q(available_at__lte=models.F('due_at')),

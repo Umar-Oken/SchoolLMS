@@ -16,6 +16,16 @@
   JSON yoki biznes validatsiyasi `400`;
   mavjud bo‘lmagan yoki foydalanuvchi scope’idan tashqari obyekt `404`;
   yopiq HTTP metodi `405` qaytaradi.
+- Har qanday JSON xato responsei bir xil envelope’dan foydalanadi:
+  `{"code":"...","message":"...","fields":{},"request_id":"..."}`.
+  `code` frontendning tarmoqlanishi uchun stable qiymat; validation fieldlari
+  `fields` ichida `message` va `code` bilan keladi. `request_id` support/log
+  correlation uchun response `X-Request-ID` headerida ham bo‘ladi. Stale
+  version va idempotency conflictlari `409`dagi o‘z custom code’ini saqlaydi;
+  noto‘g‘ri `Content-Type` `415` qaytaradi. Traceback clientga berilmaydi.
+- Sahifalangan list endpointlari `count`, `next`, `previous`, `results`
+  shaklida; `page_size` 20 default va 100 maksimum. Pagination ishlatmaydigan
+  endpointlar o‘zining hujjatlashtirilgan array/obyekt responseini saqlaydi.
 - Datetime qiymatlari UTC aware ko‘rinishda saqlanadi va API kontrakti UTC’ni
   ishlatadi. `Asia/Tashkent` bo‘yicha lokal ko‘rsatish UI/API taqdimot
   qatlamining mas’uliyati; serverdagi saqlangan vaqt o‘zgartirilmaydi.
@@ -30,6 +40,12 @@
   Publish service har bir Criterion’da 0 balli Level borligini tekshiradi.
   Criterion’larning `max_points` yig‘indisini qatorlararo DB CHECK bilan
   tekshirib bo‘lmaydi; bu keyingi publish service vazifasi.
+
+`POST /api/v1/attachments/` application darajasida 10 MiBdan katta body uchun
+JSON `413 file_too_large` qaytaradi. Keyingi deploy’da reverse proxy ham
+`client_max_body_size 10m` (yoki unga teng limit) bilan sozlanishi va proxy
+rad etsa shu error envelope’ni qaytarishi yoki body’ni Django handlerigacha
+o‘tkazishi shart; aks holda proxy HTML 413 contractdan tashqarida qoladi.
 
 ## Rollar va capability
 
@@ -107,6 +123,16 @@ bo‘lgan va dars sanasida kursga biriktirilgan sessionlarni; pupil esa o‘sha
 sanada kursga enrollment’i amalda bo‘lgan sessionlarni ko‘radi. `starts_at` va
 `ends_at` UTC datetime, `local_date` esa haftalik slotdan kelib chiqqan asl
 occurrence sana, `scheduled_date` esa amaldagi sana.
+
+Bu read endpointi 120 soniyalik (sozlanadigan, 60–300 soniya) timetable
+cache’dan foydalanadi. Kalit request user IDsi, role, shu sana oynasidagi
+course scope, interval va DBdagi timetable versionni o‘z ichiga oladi; shu
+sabab bir foydalanuvchining jadvali boshqasiga berilmaydi. Weekly slot, yangi
+materialize qilingan session yoki lesson exception o‘zgarsa version oshadi va
+keyingi read yangi kalitdan DB ma’lumotini oladi. Redis cache miss yoki outage
+bo‘lsa endpoint DB selector bilan ishlashda davom etadi. Production’da
+`TIMETABLE_CACHE_URL` Celery brokeridan boshqa Redis instance bo‘lishi shart;
+localhostdagi boshqa logical DB (`/2`) faqat development qulayligi.
 
 Haftalik qoida recurrence’ni belgilaydi; bitta occurrence’ni bekor qilish yoki
 ko‘chirish esa faqat o‘sha `LessonSession`ga istisno qo‘llaydi va boshqa
@@ -1226,6 +1252,78 @@ Javob:
 ```
 
 ## Swagger’da sinash
+
+## Pupil dashboard
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `GET /api/v1/me/dashboard/` | Bearer JWT; faqat pupil | `200` — bugungi darslar, 3 ta yaqin deadline, completion va so‘nggi published feedback | token yo‘q `401`; teacher `403` |
+
+Dashboard aggregation resource: u yangi baho yoki completion yozmaydi, mavjud
+course scope’dan o‘qiydi. `completion.eligible_topics` maxraji faqat joriy
+pupilning faol course’laridagi published va arxivlanmagan topiclardan iborat;
+`completed_topics` esa o‘sha topiclardagi `read` completion soni. Bu mastery
+ham, baho ham emas. Deadline ichidagi `completion_status` mavzu read holati,
+`submission_status` esa topshirish/tekshirish holati bo‘lib, ular alohida
+maydonlardir. Draft yoki ungraded grade feedback ro‘yxatiga kirmaydi va hech
+qachon `0` ballga aylantirilmaydi.
+
+```bash
+curl http://127.0.0.1:8000/api/v1/me/dashboard/ \
+  -H "Authorization: Bearer <access-token>"
+```
+
+```json
+{
+  "today_lessons": [{"id": 17, "course_id": 4, "course": "Matematika", "starts_at": "2026-11-25T09:00:00Z", "ends_at": "2026-11-25T10:00:00Z", "room": "101"}],
+  "completion": {"eligible_topics": 8, "completed_topics": 5},
+  "upcoming_deadlines": [{"assignment_id": 12, "topic_id": 9, "course_id": 4, "title": "Kasrlar", "due_at": "2026-11-27T12:00:00Z", "completion_status": "completed", "submission_status": "submitted_ungraded"}],
+  "recent_feedback": [{"assignment_id": 11, "title": "Tenglamalar", "course_id": 4, "total": "8.00", "feedback": "Yaxshi", "published_at": "2026-11-24T08:00:00Z"}]
+}
+```
+
+## Teacher dashboard
+
+| Metod va yo‘l | Kirish / ruxsat | Muvaffaqiyatli javob | Asosiy xatolar |
+|---|---|---|---|
+| `GET /api/v1/teaching/dashboard/` | Bearer JWT; faqat teacher | `200` — tegishli bugungi sessionlar hamda tekshirish countlari | token yo‘q `401`; pupil `403` |
+
+Bu aggregation yangi baho yozmaydi. `today_sessions` faqat teacherning faol
+biriktirilgan course’ida va teacher o‘zi (yoki override sifatida) o‘tadigan,
+bekor qilinmagan bugungi sessionlarni qaytaradi. `review_summary` esa faqat
+`can_grade=True` bo‘lgan course’lardagi eng so‘nggi revisionlarni hisoblaydi:
+`submitted_ungraded_count` — return qilinmagan va hali grade yozilmagan ish;
+`returned_count` — return qilingan ish; draft yoki published grade bu ikki
+countga kirmaydi. Shuning uchun haqiqiy `0.00` baho “ungraded” hisoblanmaydi.
+
+`late_queue` mavjud assignment-scoped queue’ga navigation contract beradi:
+`endpoint_template`dagi `{assignment_id}` o‘rniga teacher ko‘ra oladigan
+assignment IDsi qo‘yiladi, `query` esa `late=true&status=submitted` tarzida
+yuboriladi. Shu filterlar `GET /api/v1/assignments/<id>/submissions/` va
+`GET /api/v1/courses/<id>/gradebook/`da ham ishlaydi; `status` qiymatlari
+`submitted`, `draft`, `graded`, `returned`. Queue faqat minimal pupil
+ID/ism/familiyasini beradi, dashboardning o‘zi pupil profilini bermaydi.
+
+```bash
+curl http://127.0.0.1:8000/api/v1/teaching/dashboard/ \
+  -H "Authorization: Bearer <access-token>"
+```
+
+```json
+{
+  "today_sessions": [{"id": 17, "course_id": 4, "course": "Matematika", "starts_at": "2026-11-25T09:00:00Z", "ends_at": "2026-11-25T10:00:00Z", "room": "101"}],
+  "review_summary": {
+    "submitted_ungraded_count": 4,
+    "returned_count": 1,
+    "late_submitted_ungraded_count": 2,
+    "late_queue": {
+      "endpoint_template": "/api/v1/assignments/{assignment_id}/submissions/",
+      "query": {"late": "true", "status": "submitted"},
+      "description": "Teacher-scoped assignment uchun kech, baholanmagan navbat."
+    }
+  }
+}
+```
 
 1. Serverni ishga tushirib `/api/docs/`ni oching.
 2. `POST /api/v1/auth/login/`ga username/parolni yuboring; CSRF talab qilinmaydi.

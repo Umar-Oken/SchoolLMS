@@ -1,3 +1,4 @@
+from datetime import datetime, time, timedelta
 from io import StringIO
 
 from django.contrib import admin as django_admin
@@ -5,6 +6,7 @@ from django.contrib.auth.models import Group, Permission
 from django.core.management import call_command, CommandError
 from django.db import IntegrityError, transaction
 from django.test import RequestFactory, TestCase
+from django.utils import timezone
 from drf_spectacular.generators import SchemaGenerator
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -19,6 +21,214 @@ from accounts.permissions import (
     CanManageAcademics,
     MustChangePasswordPermission,
 )
+
+
+class PupilDashboardTests(TestCase):
+    def setUp(self):
+        from academics.models import AcademicYear, CourseOffering, Enrollment, SchoolClass, Subject, Term
+        from assignments.models import Assignment, Grade, Submission, SubmissionRevision
+        from learning.models import Completion, Topic
+        from scheduling.models import LessonSession, Room, WeeklySlot
+
+        today = timezone.localdate()
+        self.pupil = User.objects.create_user(
+            username='dashboard-pupil-a', password='safe-password', role=User.Role.PUPIL,
+        )
+        other_pupil = User.objects.create_user(
+            username='dashboard-pupil-b', password='safe-password', role=User.Role.PUPIL,
+        )
+        self.teacher = User.objects.create_user(
+            username='dashboard-teacher', password='safe-password', role=User.Role.TEACHER,
+        )
+        year = AcademicYear.objects.create(
+            label='Dashboard year', start_date=today - timedelta(days=20), end_date=today + timedelta(days=20),
+        )
+        term = Term.objects.create(year=year, order=1, start_date=year.start_date, end_date=year.end_date)
+        school_class = SchoolClass.objects.create(year=year, grade_level=7, section='D')
+        course = CourseOffering.objects.create(
+            school_class=school_class, subject=Subject.objects.create(code='DASH', title='Dashboard fani'),
+        )
+        for pupil in (self.pupil, other_pupil):
+            Enrollment.objects.create(pupil=pupil, course=course, start_date=today)
+        topic = Topic.objects.create(course=course, term=term, title='Published topic', objective='Objective', order=1, state=Topic.State.PUBLISHED, published_at=timezone.now())
+        draft_topic = Topic.objects.create(course=course, term=term, title='Draft topic', objective='Hidden', order=2)
+        Completion.objects.create(pupil=self.pupil, topic=topic)
+        Completion.objects.create(pupil=self.pupil, topic=draft_topic)
+        now = timezone.now()
+        self.assignments = []
+        for index in range(4):
+            self.assignments.append(Assignment.objects.create(
+                topic=topic, title=f'Deadline {index}', instructions='Do work',
+                available_at=now - timedelta(days=1), due_at=now + timedelta(days=index + 1),
+                closes_at=now + timedelta(days=index + 2), max_score='10.00', max_attempts=1,
+                state=Assignment.State.PUBLISHED, published_at=now,
+            ))
+        submission = Submission.objects.create(assignment=self.assignments[0], pupil=self.pupil)
+        revision = SubmissionRevision.objects.create(submission=submission, revision_number=1, submitted_text='A')
+        Grade.objects.create(revision=revision, grader=self.teacher, state=Grade.State.PUBLISHED, total='8.00', feedback='A feedback', published_at=now)
+        hidden_submission = Submission.objects.create(assignment=self.assignments[1], pupil=self.pupil)
+        hidden_revision = SubmissionRevision.objects.create(submission=hidden_submission, revision_number=1, submitted_text='A')
+        Grade.objects.create(revision=hidden_revision, grader=self.teacher, state=Grade.State.DRAFT, total='0.00', feedback='Hidden', published_at=None)
+        other_submission = Submission.objects.create(assignment=self.assignments[2], pupil=other_pupil)
+        other_revision = SubmissionRevision.objects.create(submission=other_submission, revision_number=1, submitted_text='B')
+        Grade.objects.create(revision=other_revision, grader=self.teacher, state=Grade.State.PUBLISHED, total='9.00', feedback='B feedback', published_at=now)
+        room = Room.objects.create(name='D-101')
+        starts_at = timezone.make_aware(datetime.combine(today, time(9, 0)))
+        ends_at = timezone.make_aware(datetime.combine(today, time(10, 0)))
+        slot = WeeklySlot.objects.create(course=course, teacher=self.teacher, room=room, weekday=today.weekday(), start_time=time(9, 0), end_time=time(10, 0), valid_from=today)
+        LessonSession.objects.create(slot=slot, local_date=today, scheduled_date=today, starts_at=starts_at, ends_at=ends_at)
+
+    def test_dashboard_is_pupil_scoped_and_hides_unpublished_grades(self):
+        client = APIClient()
+        client.force_authenticate(self.pupil)
+        response = client.get('/api/v1/me/dashboard/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['completion'], {'eligible_topics': 1, 'completed_topics': 1})
+        self.assertEqual(len(response.data['today_lessons']), 1)
+        self.assertEqual([item['title'] for item in response.data['upcoming_deadlines']], ['Deadline 0', 'Deadline 1', 'Deadline 2'])
+        self.assertEqual(response.data['upcoming_deadlines'][0]['completion_status'], 'completed')
+        self.assertEqual(response.data['upcoming_deadlines'][0]['submission_status'], 'graded')
+        self.assertEqual(response.data['upcoming_deadlines'][1]['submission_status'], 'submitted_ungraded')
+        self.assertEqual(len(response.data['recent_feedback']), 1)
+        self.assertEqual(response.data['recent_feedback'][0]['feedback'], 'A feedback')
+        self.assertNotIn('B feedback', str(response.data))
+        self.assertNotIn('Hidden', str(response.data))
+
+    def test_dashboard_rejects_teacher(self):
+        client = APIClient()
+        client.force_authenticate(self.teacher)
+        self.assertEqual(client.get('/api/v1/me/dashboard/').status_code, status.HTTP_403_FORBIDDEN)
+
+
+class TeacherDashboardTests(TestCase):
+    def setUp(self):
+        from academics.models import (
+            AcademicYear,
+            CourseOffering,
+            SchoolClass,
+            Subject,
+            TeachingAssignment,
+            Term,
+        )
+        from assignments.models import (
+            Assignment,
+            Grade,
+            Submission,
+            SubmissionReturn,
+            SubmissionRevision,
+        )
+        from learning.models import Topic
+        from scheduling.models import LessonSession, Room, WeeklySlot
+
+        today = timezone.localdate()
+        now = timezone.now()
+        self.teacher = User.objects.create_user(
+            username='teacher-dashboard-a', password='safe-password', role=User.Role.TEACHER,
+        )
+        other_teacher = User.objects.create_user(
+            username='teacher-dashboard-b', password='safe-password', role=User.Role.TEACHER,
+        )
+        pupil = User.objects.create_user(
+            username='teacher-dashboard-pupil', password='safe-password', role=User.Role.PUPIL,
+        )
+        year = AcademicYear.objects.create(
+            label='Teacher dashboard year', start_date=today - timedelta(days=20), end_date=today + timedelta(days=20),
+        )
+        term = Term.objects.create(year=year, order=1, start_date=year.start_date, end_date=year.end_date)
+        school_class = SchoolClass.objects.create(year=year, grade_level=8, section='A')
+        other_school_class = SchoolClass.objects.create(year=year, grade_level=8, section='B')
+        course = CourseOffering.objects.create(
+            school_class=school_class, subject=Subject.objects.create(code='TDASH-A', title='Teacher A course'),
+        )
+        other_course = CourseOffering.objects.create(
+            school_class=other_school_class, subject=Subject.objects.create(code='TDASH-B', title='Teacher B course'),
+        )
+        TeachingAssignment.objects.create(
+            course=course, teacher=self.teacher, start_date=today, can_grade=True,
+        )
+        TeachingAssignment.objects.create(
+            course=other_course, teacher=other_teacher, start_date=today, can_grade=True,
+        )
+        topic = Topic.objects.create(
+            course=course, term=term, title='A topic', objective='Objective', order=1,
+            state=Topic.State.PUBLISHED, published_at=now,
+        )
+        other_topic = Topic.objects.create(
+            course=other_course, term=term, title='B topic', objective='Objective', order=1,
+            state=Topic.State.PUBLISHED, published_at=now,
+        )
+
+        def revision_for(topic_value, title, *, is_late=False):
+            assignment = Assignment.objects.create(
+                topic=topic_value, title=title, instructions='Do work',
+                available_at=now - timedelta(days=2), due_at=now - timedelta(days=1),
+                closes_at=now + timedelta(days=1), max_score='10.00', max_attempts=2,
+                state=Assignment.State.PUBLISHED, published_at=now,
+            )
+            submission = Submission.objects.create(assignment=assignment, pupil=pupil)
+            revision = SubmissionRevision.objects.create(
+                submission=submission, revision_number=1, submitted_text='Work', is_late=is_late,
+            )
+            return assignment, revision
+
+        self.late_assignment, late_revision = revision_for(topic, 'Late ungraded', is_late=True)
+        _, returned_revision = revision_for(topic, 'Returned')
+        SubmissionReturn.objects.create(
+            revision=returned_revision, returned_by=self.teacher, reason='Please revise.',
+        )
+        _, draft_revision = revision_for(topic, 'Draft graded')
+        Grade.objects.create(
+            revision=draft_revision, grader=self.teacher, state=Grade.State.DRAFT,
+            total='7.00', feedback='Draft only',
+        )
+        revision_for(other_topic, 'Other teacher late', is_late=True)
+
+        room = Room.objects.create(name='Teacher dashboard room')
+        start = timezone.make_aware(datetime.combine(today, time(9, 0)))
+        end = timezone.make_aware(datetime.combine(today, time(10, 0)))
+        for course_value, teacher in ((course, self.teacher), (other_course, other_teacher)):
+            slot = WeeklySlot.objects.create(
+                course=course_value, teacher=teacher, room=room, weekday=today.weekday(),
+                start_time=time(9, 0), end_time=time(10, 0), valid_from=today,
+            )
+            LessonSession.objects.create(
+                slot=slot, local_date=today, scheduled_date=today, starts_at=start, ends_at=end,
+            )
+
+    def test_dashboard_is_teacher_scoped_and_separates_returned_from_ungraded(self):
+        client = APIClient()
+        client.force_authenticate(self.teacher)
+
+        response = client.get('/api/v1/teaching/dashboard/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['today_sessions']), 1)
+        self.assertEqual(response.data['today_sessions'][0]['course'], 'Teacher A course')
+        summary = response.data['review_summary']
+        self.assertEqual(summary['submitted_ungraded_count'], 1)
+        self.assertEqual(summary['returned_count'], 1)
+        self.assertEqual(summary['late_submitted_ungraded_count'], 1)
+        self.assertEqual(
+            summary['late_queue']['endpoint_template'],
+            '/api/v1/assignments/{assignment_id}/submissions/',
+        )
+        self.assertEqual(summary['late_queue']['query'], {'late': 'true', 'status': 'submitted'})
+        self.assertNotIn('pupil', str(response.data))
+
+        queue = client.get(
+            f'/api/v1/assignments/{self.late_assignment.pk}/submissions/',
+            {'late': 'true', 'status': 'submitted'},
+        )
+        self.assertEqual(queue.status_code, status.HTTP_200_OK)
+        self.assertEqual(queue.data['count'], 1)
+        self.assertEqual(queue.data['results'][0]['status'], 'submitted')
+
+    def test_dashboard_rejects_pupil(self):
+        pupil = User.objects.get(username='teacher-dashboard-pupil')
+        client = APIClient()
+        client.force_authenticate(pupil)
+        self.assertEqual(client.get('/api/v1/teaching/dashboard/').status_code, status.HTTP_403_FORBIDDEN)
 
 
 class UserModelTests(TestCase):

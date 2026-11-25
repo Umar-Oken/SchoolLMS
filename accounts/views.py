@@ -22,7 +22,12 @@ from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import AccountLifecycleAudit, User
+from accounts.dashboard_serializers import (
+    PupilDashboardSerializer,
+    TeacherDashboardSerializer,
+)
 from accounts.permissions import CanManageAccounts, MustChangePasswordPermission
+from accounts.selectors import pupil_dashboard_data, teacher_dashboard_data
 from accounts.serializers import (
     AccountCreateSerializer,
     AccountCreatedResponseSerializer,
@@ -159,6 +164,81 @@ class CurrentUserView(RetrieveUpdateAPIView):
 
     def get_object(self):
         return self.request.user
+
+
+class PupilDashboardView(GenericAPIView):
+    serializer_class = PupilDashboardSerializer
+    permission_classes = (IsAuthenticated, MustChangePasswordPermission)
+    authentication_classes = (JWTAuthentication,)
+
+    @extend_schema(
+        summary='Pupil dashboard',
+        description=(
+            'Faqat joriy pupil uchun bugungi darslar, yaqin uchta deadline, '
+            'published feedback va published mavzu completion hisobini qaytaradi. '
+            'Completion mastery yoki baho emas; draft, arxivlangan va begona itemlar '
+            'maxrajga ham, responsega ham kirmaydi.'
+        ),
+        tags=['Pupil dashboard'],
+        responses={status.HTTP_200_OK: PupilDashboardSerializer, **common_error_responses()},
+    )
+    def get(self, request):
+        if request.user.role != User.Role.PUPIL:
+            raise PermissionDenied('Bu endpoint faqat pupil uchun.')
+        data = pupil_dashboard_data(request.user)
+        payload = {
+            'today_lessons': data['lessons'],
+            'completion': {
+                'eligible_topics': data['topics'].count(),
+                'completed_topics': len(data['completed_topic_ids']),
+            },
+            'upcoming_deadlines': data['deadlines'],
+            'recent_feedback': data['feedback'],
+        }
+        return Response(PupilDashboardSerializer(
+            payload,
+            context={'completed_topic_ids': data['completed_topic_ids']},
+        ).data)
+
+
+class TeacherDashboardView(GenericAPIView):
+    serializer_class = TeacherDashboardSerializer
+    permission_classes = (IsAuthenticated, MustChangePasswordPermission)
+    authentication_classes = (JWTAuthentication,)
+
+    @extend_schema(
+        summary='Teacher dashboard va tekshirish xulosasi',
+        description=(
+            'Faqat joriy teacherning faol biriktirilgan kurslaridagi bugungi '
+            'sessionlar va faqat can_grade kurslardagi topshirish navbatini qaytaradi. '
+            'submitted_ungraded_count faqat return qilinmagan va grade yo‘q '
+            'bo‘lgan eng so‘nggi revisionlar; returned_count undan alohida. '
+            'late_queue assignment-scoped mavjud submissions API uchun navigation '
+            'contract bo‘lib, yangi grading action yaratmaydi.'
+        ),
+        tags=['Teacher dashboard'],
+        responses={status.HTTP_200_OK: TeacherDashboardSerializer, **common_error_responses()},
+    )
+    def get(self, request):
+        if request.user.role != User.Role.TEACHER:
+            raise PermissionDenied('Bu endpoint faqat teacher uchun.')
+        data = teacher_dashboard_data(request.user)
+        payload = {
+            'today_sessions': data['sessions'],
+            'review_summary': {
+                **data['counts'],
+                'late_queue': {
+                    'endpoint_template': '/api/v1/assignments/{assignment_id}/submissions/',
+                    'query': {'late': 'true', 'status': 'submitted'},
+                    'description': (
+                        'Har bir teacher-scoped assignment uchun mavjud queue; '
+                        'UI assignment_id o‘rniga tegishli IDni qo‘yadi. '
+                        'status=submitted grade yo‘q, return qilinmagan ishni bildiradi.'
+                    ),
+                },
+            },
+        }
+        return Response(TeacherDashboardSerializer(payload).data)
 
 
 class ChangePasswordView(GenericAPIView):

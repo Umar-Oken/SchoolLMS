@@ -1,15 +1,18 @@
 from django.utils import timezone
 from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
+from rest_framework.filters import OrderingFilter
 from rest_framework.exceptions import NotFound
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from accounts.permissions import MustChangePasswordPermission
 from notifications.models import Notification
+from notifications.filters import NotificationFilter
 from notifications.pagination import NotificationPagination
 from notifications.serializers import NotificationReadSerializer
 from root.openapi import common_error_responses
+from django_filters.rest_framework import DjangoFilterBackend
 
 
 class NotificationListView(generics.ListAPIView):
@@ -19,6 +22,10 @@ class NotificationListView(generics.ListAPIView):
     )
     serializer_class = NotificationReadSerializer
     pagination_class = NotificationPagination
+    filter_backends = (DjangoFilterBackend, OrderingFilter)
+    filterset_class = NotificationFilter
+    ordering_fields = ('created_at', 'title')
+    ordering = ('-created_at', '-pk')
 
     def get_queryset(self):
         return Notification.objects.filter(

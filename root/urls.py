@@ -30,6 +30,11 @@ urlpatterns = [
     path('api/v1/', include('assessments.urls')),
 ]
 
+handler400 = 'root.errors.bad_request'
+handler403 = 'root.errors.permission_denied'
+handler404 = 'root.errors.not_found'
+handler500 = 'root.errors.server_error'
+
 if settings.DEBUG:
     from drf_spectacular.views import (
         SpectacularAPIView,

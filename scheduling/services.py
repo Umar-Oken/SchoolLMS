@@ -146,9 +146,14 @@ def _lock_timetable():
     return TimetableLock.objects.select_for_update().get(pk='school')
 
 
+def _bump_timetable_version(lock):
+    lock.schedule_version += 1
+    lock.save(update_fields=('schedule_version',))
+
+
 @transaction.atomic
 def save_weekly_slot(*, validated_data, instance=None):
-    _lock_timetable()
+    timetable_lock = _lock_timetable()
 
     if instance is None:
         slot = WeeklySlot(**validated_data)
@@ -163,6 +168,7 @@ def save_weekly_slot(*, validated_data, instance=None):
         raise ValidationError(conflicts)
 
     slot.save()
+    _bump_timetable_version(timetable_lock)
     return slot
 
 
@@ -198,7 +204,7 @@ def _find_conflicts(slot):
 
 @transaction.atomic
 def materialize_lessons(*, from_date, to_date):
-    _lock_timetable()
+    timetable_lock = _lock_timetable()
     if from_date > to_date:
         raise ValidationError({
             'to': 'Tugash sanasi boshlanish sanasidan oldin bo‘lishi mumkin emas.',
@@ -242,6 +248,8 @@ def materialize_lessons(*, from_date, to_date):
             )
             if created:
                 created_sessions.append(session)
+    if created_sessions:
+        _bump_timetable_version(timetable_lock)
     return created_sessions
 
 
@@ -267,7 +275,7 @@ def apply_schedule_exception(
     teacher=None,
     room=None,
 ):
-    _lock_timetable()
+    timetable_lock = _lock_timetable()
     session = (
         LessonSession.objects.select_for_update()
         .select_related('slot', 'slot__course', 'slot__teacher', 'slot__room')
@@ -285,7 +293,7 @@ def apply_schedule_exception(
     old_room_id = session.effective_room_id
 
     if action == ScheduleException.Action.CANCELLED:
-        return _record_schedule_exception(
+        updated_session = _record_schedule_exception(
             session=session,
             action=action,
             actor=actor,
@@ -304,6 +312,8 @@ def apply_schedule_exception(
             teacher_override=session.teacher_override,
             room_override=session.room_override,
         )
+        _bump_timetable_version(timetable_lock)
+        return updated_session
 
     new_teacher = teacher or (
         session.teacher_override
@@ -356,7 +366,7 @@ def apply_schedule_exception(
     if slot_conflicts:
         raise ValidationError(slot_conflicts)
 
-    return _record_schedule_exception(
+    updated_session = _record_schedule_exception(
         session=session,
         action=ScheduleException.Action.MOVED,
         actor=actor,
@@ -375,6 +385,8 @@ def apply_schedule_exception(
         teacher_override=new_teacher,
         room_override=new_room,
     )
+    _bump_timetable_version(timetable_lock)
+    return updated_session
 
 
 def _find_session_conflicts(

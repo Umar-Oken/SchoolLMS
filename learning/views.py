@@ -4,6 +4,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_spectacular.types import OpenApiTypes
 from rest_framework.decorators import action
+from rest_framework.filters import OrderingFilter
 from rest_framework import generics, mixins, status, viewsets
 from rest_framework.exceptions import NotFound, PermissionDenied
 from rest_framework.permissions import BasePermission, IsAuthenticated
@@ -22,6 +23,7 @@ from academics.services import ensure_term_open
 from academics.views import pupil_course_scope, teacher_course_scope
 from files.models import Attachment
 from learning.models import Announcement, Completion, Resource, Topic
+from learning.filters import TopicFilter
 from learning.serializers import (
     AnnouncementCreateSerializer,
     AnnouncementReadSerializer,
@@ -41,6 +43,8 @@ from learning.services import (
     publish_topic,
 )
 from root.openapi import common_error_responses
+from django_filters.rest_framework import DjangoFilterBackend
+from root.pagination import StandardPageNumberPagination
 
 
 class IsAnnouncementWriterOrReadOnly(BasePermission):
@@ -278,6 +282,11 @@ class TopicViewSet(
         MustChangePasswordPermission,
         IsTopicWriteTeacher,
     )
+    filter_backends = (DjangoFilterBackend, OrderingFilter)
+    filterset_class = TopicFilter
+    ordering_fields = ('term__order', 'order', 'title')
+    ordering = ('term__order', 'order', 'pk')
+    pagination_class = StandardPageNumberPagination
 
     def get_serializer_class(self):
         if self.action == 'create':

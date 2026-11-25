@@ -2,6 +2,7 @@ from django.db import transaction
 from django.db.models import QuerySet
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, serializers, status
+from rest_framework.filters import OrderingFilter
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import BasePermission, IsAuthenticated
 from rest_framework.response import Response
@@ -25,6 +26,7 @@ from assignments.models import (
     SubmissionRevision,
 )
 from assignments.gradebook_serializers import PupilGradebookEntrySerializer
+from assignments.filters import AssignmentFilter
 from assignments.teacher_gradebook_serializers import (
     TeacherSubmissionQueueSerializer,
 )
@@ -62,6 +64,8 @@ from assignments.selectors import (
     teacher_submission_queue_queryset,
 )
 from root.openapi import common_error_responses
+from django_filters.rest_framework import DjangoFilterBackend
+from root.pagination import StandardPageNumberPagination
 
 
 class IsTeacher(BasePermission):
@@ -80,6 +84,17 @@ class IsAssignmentReader(BasePermission):
 class IsPupil(BasePermission):
     def has_permission(self, request, view):
         return getattr(request.user, 'role', None) == User.Role.PUPIL
+
+
+def teacher_queue_filters(query_params):
+    late = query_params.get('late')
+    status_value = query_params.get('status')
+    if late is not None and late not in ('true', 'false'):
+        raise ValidationError({'late': 'true yoki false yuboring.'})
+    allowed_statuses = {'submitted', 'draft', 'graded', 'returned'}
+    if status_value is not None and status_value not in allowed_statuses:
+        raise ValidationError({'status': 'Noto‘g‘ri navbat statusi.'})
+    return late == 'true' if late is not None else None, status_value
 
 
 @extend_schema_view(
@@ -157,6 +172,11 @@ class AssignmentCreateView(generics.ListCreateAPIView):
         MustChangePasswordPermission,
         IsAssignmentReader,
     )
+    filter_backends = (DjangoFilterBackend, OrderingFilter)
+    filterset_class = AssignmentFilter
+    ordering_fields = ('due_at', 'available_at', 'title')
+    ordering = ('due_at', 'pk')
+    pagination_class = StandardPageNumberPagination
 
     def get_permissions(self):
         permissions = super().get_permissions()
@@ -728,6 +748,11 @@ class PupilGradebookView(generics.ListAPIView):
         MustChangePasswordPermission,
         IsPupil,
     )
+    filter_backends = (DjangoFilterBackend, OrderingFilter)
+    filterset_class = AssignmentFilter
+    ordering_fields = ('due_at', 'title')
+    ordering = ('topic__term__year__start_date', 'topic__term__order', 'pk')
+    pagination_class = StandardPageNumberPagination
 
     def get_queryset(self):
         return pupil_gradebook_queryset(
@@ -775,13 +800,22 @@ class CourseTeacherGradebookView(generics.ListAPIView):
         MustChangePasswordPermission,
         IsTeacher,
     )
+    filter_backends = (OrderingFilter,)
+    ordering_fields = ('assignment__due_at', 'pupil__last_name', 'pupil__first_name')
+    ordering = ('assignment__due_at', 'pupil__last_name', 'pupil__first_name', 'pupil_id')
+    pagination_class = StandardPageNumberPagination
 
     def get_queryset(self):
         course = get_object_or_404(
             teacher_course_scope_queryset(self.request.user),
             pk=self.kwargs['pk'],
         )
-        return teacher_submission_queue_queryset(course_id=course.pk)
+        late, queue_status = teacher_queue_filters(self.request.query_params)
+        return teacher_submission_queue_queryset(
+            course_id=course.pk,
+            late=late,
+            status=queue_status,
+        )
 
     @extend_schema(
         summary='Faol biriktirilgan kursning topshirish/baho jurnali',
@@ -789,8 +823,20 @@ class CourseTeacherGradebookView(generics.ListAPIView):
             'Faqat faol biriktirilgan teacher kursining published assignment '
             'submissionlarini ko‘rsatadi. Har pupil uchun minimal ID/ism va '
             'eng so‘nggi revision hamda grade holati qaytadi; draft matn va '
-            'fayl ma’lumotlari berilmaydi.'
+            'fayl ma’lumotlari berilmaydi. late=true va '
+            'status=submitted|draft|graded|returned ixtiyoriy filterlardir.'
         ),
+        parameters=[
+            OpenApiParameter(
+                name='late', type=OpenApiTypes.BOOL, location=OpenApiParameter.QUERY,
+                required=False, description='Eng so‘nggi revisionning kechligi.',
+            ),
+            OpenApiParameter(
+                name='status', type=OpenApiTypes.STR, location=OpenApiParameter.QUERY,
+                required=False,
+                description='submitted, draft, graded yoki returned.',
+            ),
+        ],
         responses={
             200: TeacherSubmissionQueueSerializer(many=True),
             **common_error_responses(),
@@ -808,6 +854,10 @@ class AssignmentSubmissionQueueView(generics.ListAPIView):
         MustChangePasswordPermission,
         IsTeacher,
     )
+    filter_backends = (OrderingFilter,)
+    ordering_fields = ('pupil__last_name', 'pupil__first_name', 'latest_revision__submitted_at')
+    ordering = ('pupil__last_name', 'pupil__first_name', 'pupil_id')
+    pagination_class = StandardPageNumberPagination
 
     def get_queryset(self):
         courses = teacher_course_scope_queryset(self.request.user)
@@ -820,8 +870,11 @@ class AssignmentSubmissionQueueView(generics.ListAPIView):
             ),
             pk=self.kwargs['pk'],
         )
+        late, queue_status = teacher_queue_filters(self.request.query_params)
         return teacher_submission_queue_queryset(
             assignment_id=assignment.pk,
+            late=late,
+            status=queue_status,
         )
 
     @extend_schema(
@@ -829,8 +882,20 @@ class AssignmentSubmissionQueueView(generics.ListAPIView):
         description=(
             'Faol assigned teacher faqat o‘z published vazifasidagi submitted '
             'ishlarni ko‘radi. Eng so‘nggi revision statusi submitted, draft, '
-            'graded yoki returned; pupil identifikatori minimal.'
+            'graded yoki returned; pupil identifikatori minimal. late=true va '
+            'status=submitted|draft|graded|returned ixtiyoriy filterlardir.'
         ),
+        parameters=[
+            OpenApiParameter(
+                name='late', type=OpenApiTypes.BOOL, location=OpenApiParameter.QUERY,
+                required=False, description='Eng so‘nggi revisionning kechligi.',
+            ),
+            OpenApiParameter(
+                name='status', type=OpenApiTypes.STR, location=OpenApiParameter.QUERY,
+                required=False,
+                description='submitted, draft, graded yoki returned.',
+            ),
+        ],
         responses={
             200: TeacherSubmissionQueueSerializer(many=True),
             **common_error_responses(),

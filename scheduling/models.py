@@ -10,6 +10,7 @@ ATTENDANCE_STATUS_VALUES = ('present', 'absent', 'late', 'excused', 'unmarked')
 
 class TimetableLock(models.Model):
     key = models.CharField(max_length=32, primary_key=True, default='school')
+    schedule_version = models.PositiveBigIntegerField(default=1)
 
     class Meta:
         db_table = 'scheduling_timetable_lock'
