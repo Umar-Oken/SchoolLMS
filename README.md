@@ -38,10 +38,9 @@ Django migratsiyalari sxemani yangilaydi, mavjud qatorlarni o‘chirib tashlamay
 
 Production’da `DEBUG=false`, kuchli `DJANGO_SECRET_KEY`, aniq
 `DJANGO_ALLOWED_HOSTS` va PostgreSQL ulanish qiymatlarini muhit o‘zgaruvchilari
-orqali bering. P081’da Gunicorn production dependency sifatida o‘rnatilib,
-`gunicorn root.wsgi:application` komandasi sozlangach, uni systemd, Supervisor
-yoki hosting process manager orqali boshqaring. Development serverini
-production’da ishlatmang.
+orqali bering. Gunicorn komandasi, environment namunasi va `check --deploy`
+qaydlarini [production backend qo‘llanmasidan](docs/PRODUCTION_BACKEND.md)
+oling. Development serverini production’da ishlatmang.
 
 ## Redis va Celery lokal ishga tushirish
 
@@ -153,6 +152,22 @@ python manage.py spectacular --validate --file /tmp/schoollms-openapi.yaml
 ```
 
 Testlar sozlangan PostgreSQL bazasidan foydalanadi.
+
+## Backend CI
+
+GitHub Actions workflowi `.github/workflows/backend-ci.yml` pull request va
+`main`ga push holatlarida quyidagi dalillarni yig'adi: Ruff lint, yangi
+PostgreSQL bazasiga migration, pytest, migration drift tekshiruvi va valid
+OpenAPI fayli. Schema natijasi `openapi-schema` nomli Actions artifact sifatida
+saqlanadi. Pipeline test uchun vaqtinchalik PostgreSQL service ishlatadi;
+production DB, Redis, ClamAV yoki tashqi AI xizmatiga ulanmaydi.
+
+Scanner va boshqa tashqi adapterlar unit testlarda mock qilinadi. Haqiqiy
+tashqi xizmat smoke testi bo'lsa, uni `integration_smoke` pytest marker bilan
+belgilab, Actions'ning qo'lda `Run workflow` oynasidagi
+`run_integration_smoke=true` tanlovi orqali alohida ishga tushiring. Bunday
+smoke muhit secretlari repository settings orqali beriladi; workflow YAMLga
+secret yozilmaydi.
 
 ## Sintetik development ma’lumotlari
 

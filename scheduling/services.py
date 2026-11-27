@@ -1,4 +1,4 @@
-from datetime import datetime, time, timedelta, timezone as datetime_timezone
+from datetime import datetime, timedelta, timezone as datetime_timezone
 from zoneinfo import ZoneInfo
 
 from django.core.exceptions import ValidationError

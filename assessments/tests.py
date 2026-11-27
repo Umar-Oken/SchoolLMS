@@ -750,9 +750,11 @@ def test_pupil_starts_one_open_attempt_with_keyless_snapshot(question_bank_data)
     Option.objects.create(question=question, text='Wrong', is_correct=False)
     Option.objects.create(question=question, text='Correct', is_correct=True)
     ExamItem.objects.create(exam=exam, question=question, question_version=1, points='1.00', position=0)
-    teacher = APIClient(); teacher.force_authenticate(question_bank_data['teacher'])
+    teacher = APIClient()
+    teacher.force_authenticate(question_bank_data['teacher'])
     assert teacher.post(f'/api/v1/exams/{exam.pk}/publish/').status_code == 200
-    pupil = APIClient(); pupil.force_authenticate(question_bank_data['pupil'])
+    pupil = APIClient()
+    pupil.force_authenticate(question_bank_data['pupil'])
     first = pupil.post(f'/api/v1/exams/{exam.pk}/attempts/')
     second = pupil.post(f'/api/v1/exams/{exam.pk}/attempts/')
     assert first.status_code == second.status_code == status.HTTP_201_CREATED
@@ -769,10 +771,12 @@ def test_pupil_starts_one_open_attempt_with_keyless_snapshot(question_bank_data)
 def test_attempt_rejects_closed_exam_inactive_enrollment_and_limit(question_bank_data):
     exam = create_draft_exam(question_bank_data)
     now = timezone.now()
-    exam.state = Exam.State.PUBLISHED; exam.published_at = now
+    exam.state = Exam.State.PUBLISHED
+    exam.published_at = now
     exam.opens_at, exam.closes_at = now - timedelta(hours=2), now - timedelta(hours=1)
     exam.save(update_fields=('state', 'published_at', 'opens_at', 'closes_at'))
-    client = APIClient(); client.force_authenticate(question_bank_data['pupil'])
+    client = APIClient()
+    client.force_authenticate(question_bank_data['pupil'])
     assert client.post(f'/api/v1/exams/{exam.pk}/attempts/').status_code == status.HTTP_400_BAD_REQUEST
     exam.opens_at, exam.closes_at = now - timedelta(minutes=1), now + timedelta(hours=1)
     exam.save(update_fields=('opens_at', 'closes_at'))
@@ -808,7 +812,8 @@ def test_parallel_attempt_start_keeps_one_active_attempt(question_bank_data):
     Option.objects.create(question=question, text='No', is_correct=False)
     Option.objects.create(question=question, text='Yes', is_correct=True)
     ExamItem.objects.create(exam=exam, question=question, question_version=1, points='1.00', position=0)
-    teacher = APIClient(); teacher.force_authenticate(question_bank_data['teacher'])
+    teacher = APIClient()
+    teacher.force_authenticate(question_bank_data['teacher'])
     assert teacher.post(f'/api/v1/exams/{exam.pk}/publish/').status_code == 200
     barrier = Barrier(2)
     with ThreadPoolExecutor(max_workers=2) as executor:

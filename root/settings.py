@@ -24,10 +24,14 @@ from files.scanners import validate_scanner_configuration
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 
-DEBUG_VALUE = os.environ.get("DJANGO_DEBUG", "true").strip().lower()
-if DEBUG_VALUE not in {"true", "false"}:
-    raise ImproperlyConfigured("DJANGO_DEBUG must be either 'true' or 'false'.")
-DEBUG = DEBUG_VALUE == "true"
+def env_bool(name, default):
+    value = os.environ.get(name, str(default)).strip().lower()
+    if value not in {"true", "false"}:
+        raise ImproperlyConfigured(f"{name} must be either 'true' or 'false'.")
+    return value == "true"
+
+
+DEBUG = env_bool("DJANGO_DEBUG", True)
 
 APP_ENV = os.environ.get(
     "DJANGO_ENV",
@@ -37,6 +41,13 @@ if APP_ENV not in {"development", "test", "production"}:
     raise ImproperlyConfigured(
         "DJANGO_ENV must be 'development', 'test' or 'production'."
     )
+
+# P085 exposes only a disabled provider boundary. A real provider is not part
+# of this release; FakeProvider is accepted solely by non-production tests.
+AI_PROVIDER = os.environ.get('AI_PROVIDER', 'disabled').strip().lower()
+AI_DAILY_JOB_LIMIT = int(os.environ.get('AI_DAILY_JOB_LIMIT', '10'))
+if AI_DAILY_JOB_LIMIT <= 0:
+    raise ImproperlyConfigured('AI_DAILY_JOB_LIMIT must be positive.')
 
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
@@ -100,6 +111,7 @@ INSTALLED_APPS = [
     'outbox.apps.OutboxConfig',
     'notifications.apps.NotificationsConfig',
     'learning.apps.LearningConfig',
+    'ai.apps.AIConfig',
     'assignments.apps.AssignmentsConfig',
     'assessments.apps.AssessmentsConfig',
     'files.apps.FilesConfig',
@@ -120,10 +132,34 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'root.middleware.RequestIdMiddleware',
+    'accounts.middleware.LoginAbuseProtectionMiddleware',
 ]
 
 SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = 'same-origin'
+SECURE_CROSS_ORIGIN_OPENER_POLICY = 'same-origin'
+X_FRAME_OPTIONS = 'DENY'
+SECURE_SSL_REDIRECT = env_bool('DJANGO_SECURE_SSL_REDIRECT', False)
+SECURE_PROXY_SSL_HEADER = (
+    ('HTTP_X_FORWARDED_PROTO', 'https')
+    if env_bool('DJANGO_TRUST_PROXY_SSL_HEADER', False)
+    else None
+)
+SECURE_HSTS_SECONDS = int(os.environ.get('DJANGO_SECURE_HSTS_SECONDS', '0'))
+if SECURE_HSTS_SECONDS < 0:
+    raise ImproperlyConfigured('DJANGO_SECURE_HSTS_SECONDS must be non-negative.')
+SECURE_HSTS_INCLUDE_SUBDOMAINS = SECURE_HSTS_SECONDS > 0
+SECURE_HSTS_PRELOAD = False
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS', '').split(',')
+    if origin.strip()
+]
 CSRF_FAILURE_VIEW = 'root.errors.csrf_failure'
 
 ROOT_URLCONF = 'root.urls'
@@ -157,6 +193,9 @@ REST_FRAMEWORK = {
         'accounts.permissions.MustChangePasswordPermission',
     ],
     'EXCEPTION_HANDLER': 'root.errors.api_exception_handler',
+    'DEFAULT_THROTTLE_RATES': {
+        'account_create': '3/hour',
+    },
 }
 
 SIMPLE_JWT = {
@@ -260,6 +299,10 @@ TIMETABLE_CACHE_URL = os.environ.get(
     'TIMETABLE_CACHE_URL',
     'redis://127.0.0.1:6379/2',
 )
+ABUSE_THROTTLE_CACHE_URL = os.environ.get(
+    'ABUSE_THROTTLE_CACHE_URL',
+    'redis://127.0.0.1:6379/3',
+)
 TIMETABLE_CACHE_TTL = int(os.environ.get('TIMETABLE_CACHE_TTL', '120'))
 if not 60 <= TIMETABLE_CACHE_TTL <= 300:
     raise ImproperlyConfigured(
@@ -289,6 +332,10 @@ CACHES = {
     'timetable': {
         'BACKEND': 'django.core.cache.backends.redis.RedisCache',
         'LOCATION': TIMETABLE_CACHE_URL,
+    },
+    'abuse': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': ABUSE_THROTTLE_CACHE_URL,
     },
 }
 CELERY_TASK_DEFAULT_QUEUE = 'default'
@@ -336,6 +383,29 @@ CELERY_BEAT_SCHEDULE = {
     },
 }
 
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'request_json': {
+            '()': 'root.logging.RequestJsonFormatter',
+        },
+    },
+    'handlers': {
+        'request_console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'request_json',
+        },
+    },
+    'loggers': {
+        'root.request': {
+            'handlers': ['request_console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
@@ -344,7 +414,48 @@ STATIC_URL = '/static/'
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
-PRIVATE_STORAGE_ROOT = BASE_DIR / 'private_files'
+PRIVATE_STORAGE_ROOT = Path(
+    os.environ.get('PRIVATE_STORAGE_ROOT', BASE_DIR / 'private_files'),
+)
+PRIVATE_STORAGE_BACKEND = os.environ.get('PRIVATE_STORAGE_BACKEND', 'local').lower()
+if PRIVATE_STORAGE_BACKEND not in {'local', 's3'}:
+    raise ImproperlyConfigured(
+        'PRIVATE_STORAGE_BACKEND must be either local or s3.',
+    )
+PRIVATE_S3_SIGNED_URL_TTL = int(
+    os.environ.get('PRIVATE_S3_SIGNED_URL_TTL', '60'),
+)
+if not 30 <= PRIVATE_S3_SIGNED_URL_TTL <= 300:
+    raise ImproperlyConfigured(
+        'PRIVATE_S3_SIGNED_URL_TTL must be between 30 and 300 seconds.',
+    )
+
+PRIVATE_S3_OPTIONS = {}
+if PRIVATE_STORAGE_BACKEND == 's3':
+    private_s3_bucket = os.environ.get('PRIVATE_S3_BUCKET', '').strip()
+    if not private_s3_bucket:
+        raise ImproperlyConfigured(
+            'PRIVATE_S3_BUCKET must be set when PRIVATE_STORAGE_BACKEND is s3.',
+        )
+    PRIVATE_S3_OPTIONS = {
+        'bucket_name': private_s3_bucket,
+        'default_acl': None,
+        'querystring_auth': True,
+        'querystring_expire': PRIVATE_S3_SIGNED_URL_TTL,
+        'file_overwrite': False,
+        'custom_domain': None,
+        'signature_version': 's3v4',
+    }
+    for option_name, env_name in (
+        ('endpoint_url', 'AWS_S3_ENDPOINT_URL'),
+        ('region_name', 'AWS_S3_REGION_NAME'),
+        ('access_key', 'AWS_S3_ACCESS_KEY_ID'),
+        ('secret_key', 'AWS_S3_SECRET_ACCESS_KEY'),
+        ('security_token', 'AWS_SESSION_TOKEN'),
+    ):
+        value = os.environ.get(env_name)
+        if value:
+            PRIVATE_S3_OPTIONS[option_name] = value
 RESOURCE_URL_ALLOWED_HOSTS = tuple(
     host.strip().lower()
     for host in os.environ.get(
@@ -362,8 +473,16 @@ STORAGES = {
         'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
     },
     'private': {
-        'BACKEND': 'files.storage.PrivateLocalStorage',
-        'OPTIONS': {'location': PRIVATE_STORAGE_ROOT},
+        'BACKEND': (
+            'files.storage.PrivateS3Storage'
+            if PRIVATE_STORAGE_BACKEND == 's3'
+            else 'files.storage.PrivateLocalStorage'
+        ),
+        'OPTIONS': (
+            PRIVATE_S3_OPTIONS
+            if PRIVATE_STORAGE_BACKEND == 's3'
+            else {'location': PRIVATE_STORAGE_ROOT}
+        ),
     },
 }
 
@@ -371,8 +490,20 @@ STORAGES = {
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration
 
+DEFAULT_MAILER_BACKEND = os.environ.get(
+    'DJANGO_DEFAULT_MAILER_BACKEND',
+    'django.core.mail.backends.console.EmailBackend',
+)
+if (
+    APP_ENV == 'production'
+    and DEFAULT_MAILER_BACKEND.endswith('console.EmailBackend')
+):
+    raise ImproperlyConfigured(
+        'DJANGO_DEFAULT_MAILER_BACKEND must use a production email backend.',
+    )
+
 MAILERS = {
     'default': {
-        'BACKEND': 'django.core.mail.backends.console.EmailBackend',
+        'BACKEND': DEFAULT_MAILER_BACKEND,
     },
 }

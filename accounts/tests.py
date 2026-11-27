@@ -1,11 +1,12 @@
 from datetime import datetime, time, timedelta
 from io import StringIO
+import json
 
 from django.contrib import admin as django_admin
 from django.contrib.auth.models import Group, Permission
 from django.core.management import call_command, CommandError
 from django.db import IntegrityError, transaction
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 from drf_spectacular.generators import SchemaGenerator
 from rest_framework import status
@@ -21,6 +22,74 @@ from accounts.permissions import (
     CanManageAcademics,
     MustChangePasswordPermission,
 )
+
+
+ABUSE_TEST_CACHES = {
+    'default': {'BACKEND': 'django.core.cache.backends.dummy.DummyCache'},
+    'timetable': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'p079-timetable',
+    },
+    'abuse': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'p079-abuse',
+    },
+}
+
+
+@override_settings(CACHES=ABUSE_TEST_CACHES)
+class AbuseThrottleTests(TestCase):
+    def test_login_throttle_returns_stable_429_without_breaking_valid_login(self):
+        user = User.objects.create_user(
+            username='throttled-login-user',
+            password='safe-test-password',
+            role=User.Role.TEACHER,
+        )
+        client = APIClient(enforce_csrf_checks=True)
+
+        valid = client.post(
+            '/api/v1/auth/login/',
+            {'username': user.username, 'password': 'safe-test-password'},
+            format='json',
+        )
+        self.assertEqual(valid.status_code, status.HTTP_200_OK)
+
+        for _ in range(4):
+            response = client.post(
+                '/api/v1/auth/login/',
+                {'username': user.username, 'password': 'wrong-password'},
+                format='json',
+            )
+            self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+        limited = client.post(
+            '/api/v1/auth/login/',
+            {'username': user.username, 'password': 'wrong-password'},
+            format='json',
+        )
+        self.assertEqual(limited.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(json.loads(limited.content)['code'], 'login_throttled')
+        self.assertEqual(limited['Retry-After'], '60')
+
+    def test_public_account_create_scoped_throttle_returns_429(self):
+        client = APIClient(enforce_csrf_checks=True)
+        payload = {
+            'username': 'throttled-account',
+            'first_name': 'Throttle',
+            'last_name': 'Test',
+            'role': User.Role.PUPIL,
+            'password': 'Valid-Account-Password-2026!',
+        }
+
+        first = client.post('/api/v1/accounts/', payload, format='json')
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        for _ in range(2):
+            duplicate = client.post('/api/v1/accounts/', payload, format='json')
+            self.assertEqual(duplicate.status_code, status.HTTP_400_BAD_REQUEST)
+
+        limited = client.post('/api/v1/accounts/', payload, format='json')
+        self.assertEqual(limited.status_code, status.HTTP_429_TOO_MANY_REQUESTS)
+        self.assertEqual(limited.data['code'], 'throttled')
 
 
 class PupilDashboardTests(TestCase):

@@ -1,0 +1,125 @@
+name: Backend CI
+
+on:
+  pull_request:
+    paths:
+      - '**.py'
+      - 'requirements*.txt'
+      - 'pytest.ini'
+      - '.github/workflows/backend-ci.yml'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      run_integration_smoke:
+        description: Tashqi adapter smoke testlarini ishga tushirish
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Ruff lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install lint dependency
+        run: python -m pip install ruff==0.14.14
+      - name: Lint backend
+        run: ruff check .
+
+  test:
+    name: PostgreSQL migrate, test and schema
+    needs: lint
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: school_lms
+          POSTGRES_USER: schoollms
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U schoollms -d school_lms"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DJANGO_ENV: test
+      DJANGO_DEBUG: 'true'
+      DB_NAME: school_lms
+      DB_USER: schoollms
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      DB_CONN_MAX_AGE: '0'
+      ANTIVIRUS_SCANNER_BACKEND: fake
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install backend dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Apply migrations to a clean PostgreSQL database
+        run: python manage.py migrate --noinput
+      - name: Run unit and API tests with mocked external adapters
+        run: pytest -q -m "not integration_smoke"
+      - name: Reject missing migrations
+        run: python manage.py makemigrations --check --dry-run
+      - name: Generate and validate OpenAPI schema
+        run: |
+          mkdir -p artifacts
+          python manage.py spectacular --validate --file artifacts/openapi.yaml
+      - name: Upload OpenAPI schema artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-schema
+          path: artifacts/openapi.yaml
+          if-no-files-found: warn
+
+  integration-smoke:
+    name: Optional external-adapter smoke
+    needs: test
+    if: github.event_name == 'workflow_dispatch' && inputs.run_integration_smoke
+    runs-on: ubuntu-latest
+    env:
+      DJANGO_ENV: test
+      DJANGO_DEBUG: 'true'
+      DB_NAME: school_lms
+      DB_USER: schoollms
+      DB_HOST: 127.0.0.1
+      DB_PORT: '5432'
+      ANTIVIRUS_SCANNER_BACKEND: unavailable
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: school_lms
+          POSTGRES_USER: schoollms
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U schoollms -d school_lms"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run explicitly marked integration smoke tests
+        run: pytest -q -m integration_smoke || test $? -eq 5

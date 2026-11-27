@@ -19,11 +19,16 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 
+from root import health
+
 urlpatterns = [
+    path('health/live/', health.live, name='health-live'),
+    path('health/ready/', health.ready, name='health-ready'),
     path('admin/', admin.site.urls),
     path('api/v1/', include('academics.urls')),
     path('api/v1/', include('scheduling.urls')),
     path('api/v1/', include('learning.urls')),
+    path('api/v1/', include('ai.urls')),
     path('api/v1/', include('notifications.urls')),
     path('api/v1/', include('files.urls')),
     path('api/v1/', include('assignments.urls')),

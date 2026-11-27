@@ -1480,7 +1480,7 @@ def test_pupil_downloads_clean_file_only_through_published_resource_scope(
         scan_status=Attachment.ScanStatus.CLEAN,
         original_name='lesson.pdf',
     )
-    resource = Resource.objects.create(
+    Resource.objects.create(
         topic=topic_api_data['published'],
         title='Published PDF',
         attachment=attachment,

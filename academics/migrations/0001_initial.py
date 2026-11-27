@@ -2,7 +2,6 @@
 
 import django.db.models.deletion
 from django.db import migrations, models
-from django.db.models import F, Q
 
 
 class Migration(migrations.Migration):

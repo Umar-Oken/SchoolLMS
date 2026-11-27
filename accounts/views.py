@@ -13,7 +13,7 @@ from drf_spectacular.utils import (
     extend_schema_view,
 )
 from rest_framework import status
-from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
+from rest_framework.exceptions import AuthenticationFailed, NotFound, PermissionDenied
 from rest_framework.generics import GenericAPIView, RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -42,6 +42,7 @@ from accounts.serializers import (
     TokenPairResponseSerializer,
     UsernameCaseInsensitiveTokenObtainPairSerializer,
 )
+from accounts.throttling import AccountCreateRateThrottle
 from root.openapi import common_error_responses, error_response
 
 
@@ -104,6 +105,16 @@ class LoginView(GenericAPIView):
             status.HTTP_401_UNAUTHORIZED: error_response(
                 'Username yoki parol noto‘g‘ri.',
                 {'detail': 'No active account found with the given credentials'},
+            ),
+            status.HTTP_429_TOO_MANY_REQUESTS: error_response(
+                'Login urinishlari vaqtincha cheklangan.',
+                {
+                    'code': 'login_throttled',
+                    'message': 'Too many login attempts. Try again later.',
+                    'fields': {},
+                    'request_id': '8fd95b7d0f2a4e54a8a0e3fb7f7a51aa',
+                },
+                name='429 — login cheklovi',
             ),
         },
         examples=[
@@ -330,6 +341,7 @@ class AccountCreateView(GenericAPIView):
     serializer_class = AccountCreateSerializer
     permission_classes = (AllowAny,)
     authentication_classes = ()
+    throttle_classes = (AccountCreateRateThrottle,)
 
     @extend_schema(
         summary='Account yaratish',
@@ -345,6 +357,16 @@ class AccountCreateView(GenericAPIView):
             status.HTTP_400_BAD_REQUEST: error_response(
                 'Username takrorlangan yoki request maydonlari noto‘g‘ri.',
                 {'username': ['A user with that username already exists.']},
+            ),
+            status.HTTP_429_TOO_MANY_REQUESTS: error_response(
+                'Account yaratish urinishlari vaqtincha cheklangan.',
+                {
+                    'code': 'throttled',
+                    'message': 'Request was throttled.',
+                    'fields': {},
+                    'request_id': '8fd95b7d0f2a4e54a8a0e3fb7f7a51aa',
+                },
+                name='429 — account create cheklovi',
             ),
         },
         examples=[
@@ -411,11 +433,8 @@ class AccountResetPasswordView(GenericAPIView):
         with transaction.atomic():
             try:
                 target_user = User.objects.select_for_update().get(pk=pk)
-            except User.DoesNotExist:
-                return Response(
-                    {"detail": "Foydalanuvchi topilmadi."},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
+            except User.DoesNotExist as exc:
+                raise NotFound('Foydalanuvchi topilmadi.') from exc
 
             if target_user.is_staff or target_user.is_superuser:
                 return Response(

@@ -1,5 +1,5 @@
 from django.db import models
-from django.db.models import F, Q
+from django.db.models import Q
 
 
 OUTBOX_STATUS_VALUES = ('pending', 'sent', 'processed', 'failed', 'deferred')

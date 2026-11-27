@@ -47,6 +47,17 @@ JSON `413 file_too_large` qaytaradi. Keyingi deploy’da reverse proxy ham
 rad etsa shu error envelope’ni qaytarishi yoki body’ni Django handlerigacha
 o‘tkazishi shart; aks holda proxy HTML 413 contractdan tashqarida qoladi.
 
+## Abuse cheklovi
+
+`POST /api/v1/auth/login/` username+IP bo‘yicha 5 so‘rov/minute bilan tor
+middleware orqali cheklanadi; limit oshsa `429 login_throttled` va
+`Retry-After` qaytadi. `POST /api/v1/accounts/` DRF scoped throttle orqali
+user/IP kalitida 3 so‘rov/hour bilan cheklanadi; limit oshsa `429 throttled`.
+Bu cached, approximate abuse nazorati: Redis outage’da so‘rov fail-open bo‘lishi
+mumkin va u aniq biznes kvotasi emas. Ayniqsa exam `attempt_limit` throttle
+bilan almashtirilmaydi. Anonim login uchun production reverse proxyda ham IP
+bo‘yicha mos rate limit bo‘lishi kerak; u API middleware o‘rnini bosmaydi.
+
 ## Rollar va capability
 
 Biznes rollari faqat `teacher` va `pupil`. `manage_accounts` va

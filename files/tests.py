@@ -1,6 +1,7 @@
 import uuid
 from io import BytesIO
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
 import pytest
@@ -16,7 +17,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import User
 from files.models import Attachment
-from files.storage import PrivateLocalStorage
+from files.storage import PrivateLocalStorage, PrivateS3Storage
 from files.serializers import MAX_ATTACHMENT_SIZE
 
 
@@ -83,6 +84,86 @@ def test_private_storage_alias_is_separate_from_media_root():
 
     assert isinstance(storage, PrivateLocalStorage)
     assert not Path(storage.location).is_relative_to(Path(settings.MEDIA_ROOT))
+
+
+def test_private_s3_storage_generates_short_lived_signed_download_url():
+    key = uuid.uuid4()
+    storage = PrivateS3Storage(
+        bucket_name='private-test-bucket',
+        endpoint_url='https://s3.example.test',
+        region_name='us-east-1',
+        access_key='test-access-key',
+        secret_key='test-secret-key',
+    )
+
+    signed_url = storage.signed_download_url(
+        str(key),
+        filename='lesson file.pdf',
+        expire=60,
+    )
+    query = parse_qs(urlparse(signed_url).query)
+
+    assert storage.default_acl is None
+    assert storage.querystring_auth is True
+    assert storage.file_overwrite is False
+    assert storage.custom_domain is None
+    assert query['X-Amz-Expires'] == ['60']
+    assert 'X-Amz-Signature' in query
+    assert 'ResponseContentDisposition' not in query
+
+
+@pytest.mark.django_db
+def test_s3_signed_download_requires_clean_owner_scope(attachment_api_user):
+    clean_attachment = Attachment.objects.create(
+        owner=attachment_api_user,
+        original_name='private lesson.pdf',
+        size=1,
+        detected_mime='application/pdf',
+        scan_status=Attachment.ScanStatus.CLEAN,
+    )
+    unclean_attachment = Attachment.objects.create(
+        owner=attachment_api_user,
+        original_name='unclean lesson.pdf',
+        size=1,
+        detected_mime='application/pdf',
+        scan_status=Attachment.ScanStatus.PENDING_SCAN,
+    )
+    other_pupil = User.objects.create_user(
+        username='signed-url-foreign-pupil',
+        password='safe-test-password',
+        role=User.Role.PUPIL,
+    )
+
+    class FakeSignedStorage:
+        supports_signed_urls = True
+
+        def signed_download_url(self, name, *, filename, expire):
+            assert name == str(clean_attachment.key)
+            assert filename == clean_attachment.original_name
+            assert expire == settings.PRIVATE_S3_SIGNED_URL_TTL
+            return 'https://s3.example.test/private-signed-url'
+
+    storage = FakeSignedStorage()
+    owner_client = APIClient()
+    owner_client.force_authenticate(attachment_api_user)
+    other_client = APIClient()
+    other_client.force_authenticate(other_pupil)
+
+    with patch('files.views.storages', {'private': storage}):
+        allowed = owner_client.get(
+            f'/api/v1/attachments/{clean_attachment.pk}/download/',
+        )
+        foreign = other_client.get(
+            f'/api/v1/attachments/{clean_attachment.pk}/download/',
+        )
+        unclean = owner_client.get(
+            f'/api/v1/attachments/{unclean_attachment.pk}/download/',
+        )
+
+    assert allowed.status_code == 302
+    assert allowed['Location'] == 'https://s3.example.test/private-signed-url'
+    assert foreign.status_code == 404
+    assert unclean.status_code == 404
 
 
 @pytest.mark.django_db
@@ -231,7 +312,7 @@ def test_upload_over_limit_returns_413(attachment_api_user):
 
     assert response.status_code == 413
     serializer_validate.assert_not_called()
-    assert response.data['detail'] == (
+    assert response.data['message'] == (
         'Fayl hajmi 10 MB limitdan oshmasligi kerak.'
     )
     assert not Attachment.objects.exists()

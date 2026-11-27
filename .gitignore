@@ -1,46 +1,83 @@
-atlassian-ide-plugin.xml
-cmake-build-*/
-com_crashlytics_export_strings.xml
-crashlytics-build.properties
-crashlytics.properties
-.DS_Store
+# Environment files and credentials
 .env
 .env.*
 !.env.example
-fabric.properties
-.idea
-.idea/**/aws.xml
-.idea/caches/build_file_checksums.ser
-.idea/**/contentModel.xml
-.idea/**/dataSources/
-.idea/**/dataSources.ids
-.idea/**/dataSources.local.xml
-.idea/**/dbnavigator.xml
-.idea/**/dictionaries
-.idea/**/dynamic.xml
-.idea/**/gradle.xml
-.idea/httpRequests
-.idea/**/libraries
-.idea_modules/
-.idea/**/mongoSettings.xml
-.idea/replstate.xml
-.idea/**/shelf
-.idea/sonarlint/
-.idea/**/sqlDataSources.xml
-.idea/**/tasks.xml
-.idea/**/uiDesigner.xml
-.idea/**/usage.statistics.xml
-.idea/**/workspace.xml
-*.iws
-*.log
-media/
-out/
-private_files/SECURITY_AUDIT_REPORT.md
+.aws/
+credentials.json
+service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# Python virtual environments, bytecode, and tooling caches
+.venv/
+venv/
+env/
+ENV/
 __pycache__/
 *.py[cod]
+*$py.class
 .pytest_cache/
-SECURITY_AUDIT_REPORT.md
+.ruff_cache/
+.mypy_cache/
+.pytype/
+.hypothesis/
+
+# Test coverage reports
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Django runtime data and local databases
+media/
+private_files/
 *.sqlite3
 *.sqlite3-*
+*.db
+
+# Local database backups and restore-drill output
+backups/
+restore-drills/
+*.dump
+*.backup
+*.sql.gz
+*.sql.bz2
+*.sql.xz
+
+# Generated Python distribution artifacts
+build/
+dist/
+*.egg-info/
+
+# Logs, Celery state, and temporary files
+*.log
+logs/
+celerybeat-schedule
+celerybeat.pid
+*.tmp
+*.temp
+*.swp
+*~
+
+# IDE and editor settings
+.idea/
+.vscode/
+.fleet/
+
+# Local AI-agent configuration and workspace state
+.agents/
+.codex/
+
+# Local security-audit output
+SECURITY_AUDIT_REPORT.md
+
+# Operating-system files
+.DS_Store
 Thumbs.db
-.venv
+Desktop.ini

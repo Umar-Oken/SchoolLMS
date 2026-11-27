@@ -1,10 +1,11 @@
 import hashlib
 import uuid
 
+from django.conf import settings
 from django.core.files.storage import storages
 from django.db import DatabaseError
 from django.db import transaction
-from django.http import FileResponse
+from django.http import FileResponse, HttpResponseRedirect
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
@@ -152,8 +153,18 @@ class AttachmentDownloadView(GenericAPIView):
         if attachment is None:
             raise NotFound()
 
+        storage = storages['private']
+        if getattr(storage, 'supports_signed_urls', False):
+            return HttpResponseRedirect(
+                storage.signed_download_url(
+                    str(attachment.key),
+                    filename=attachment.original_name,
+                    expire=settings.PRIVATE_S3_SIGNED_URL_TTL,
+                )
+            )
+
         try:
-            file_handle = storages['private'].open(str(attachment.key), 'rb')
+            file_handle = storage.open(str(attachment.key), 'rb')
         except FileNotFoundError as exc:
             raise NotFound('Private fayl topilmadi.') from exc
 

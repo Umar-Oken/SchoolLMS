@@ -1,0 +1,80 @@
+# Bu fayl Nginx `http` contextida include qilinadi (masalan, conf.d/ orqali).
+# api.example.edu va sertifikat fayl yo'llarini haqiqiy deployment qiymatlari
+# bilan almashtiring. Agar oldinda boshqa proxy/load balancer bo'lsa, uning
+# aniq IP/CIDR'i uchun real_ip_header/set_real_ip_fromni alohida sozlang.
+
+limit_req_zone $binary_remote_addr zone=schoollms_login_ip:10m rate=10r/m;
+
+upstream schoollms_gunicorn {
+    server 127.0.0.1:8000;
+    keepalive 16;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name api.example.edu;
+
+    # TLS P081-A deploy vaqtida sertifikat mavjud bo'lgach faollashadi.
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name api.example.edu;
+
+    ssl_certificate /etc/letsencrypt/live/api.example.edu/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.example.edu/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    # 10 MiB file payload va multipart metadata uchun edge ceiling. Django
+    # AttachmentSizeLimitUploadHandler 10 MiB file limitini qat'iy bajaradi.
+    client_max_body_size 11m;
+    client_body_timeout 30s;
+
+    error_page 413 = @schoollms_file_too_large;
+
+    # PrivateLocalStorage yoki MEDIA fayllarini web-server orqali bermang.
+    location ^~ /private_files/ {
+        return 404;
+    }
+
+    location ^~ /media/ {
+        return 404;
+    }
+
+    location = /api/v1/auth/login/ {
+        # Edge limiti username+IP Django limitiga qo'shimcha hisoblanadi.
+        limit_req zone=schoollms_login_ip burst=10 nodelay;
+        limit_req_status 429;
+        error_page 429 = @schoollms_login_throttled;
+        include /etc/nginx/snippets/schoollms-proxy.conf;
+        proxy_pass http://schoollms_gunicorn;
+    }
+
+    location ^~ /api/ {
+        include /etc/nginx/snippets/schoollms-proxy.conf;
+        proxy_pass http://schoollms_gunicorn;
+    }
+
+    # Bu prompt frontend/static hostingni sozlamaydi.
+    location / {
+        return 404;
+    }
+
+    location @schoollms_file_too_large {
+        internal;
+        default_type application/json;
+        add_header X-Request-ID $request_id always;
+        return 413 '{"code":"file_too_large","message":"Fayl hajmi 10 MB limitdan oshmasligi kerak.","fields":{},"request_id":"$request_id"}';
+    }
+
+    location @schoollms_login_throttled {
+        internal;
+        default_type application/json;
+        add_header Retry-After 60 always;
+        add_header X-Request-ID $request_id always;
+        return 429 '{"code":"login_throttled","message":"Too many login attempts. Try again later.","fields":{},"request_id":"$request_id"}';
+    }
+}

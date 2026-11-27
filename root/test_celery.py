@@ -1,8 +1,6 @@
 from root.celery import app
 from root.tasks import diagnostic_ping
 from outbox.tasks import consume_outbox_event
-from notifications.tasks import create_due_soon_reminders
-from assessments.tasks import finalize_expired_attempts
 
 
 def test_celery_declares_default_scans_and_ai_queues():
