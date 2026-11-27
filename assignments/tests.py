@@ -508,7 +508,7 @@ def test_assignment_create_rejects_server_owned_fields(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert injected_field in response.data
+    assert injected_field in response.data['fields']
     assert Assignment.objects.count() == 0
 
 
@@ -544,7 +544,7 @@ def test_assignment_create_returns_clear_errors_for_invalid_date_order(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert expected_error_field in response.data
+    assert expected_error_field in response.data['fields']
     assert Assignment.objects.count() == 0
 
 
@@ -821,34 +821,36 @@ def test_rubric_write_rolls_back_all_changes_on_child_database_error(
     monkeypatch.setattr(Level.objects, 'create', fail_create)
     client = APIClient()
     client.force_authenticate(user=assignment_model_data['teacher'])
-    with pytest.raises(IntegrityError, match='synthetic child write failure'):
-        client.put(
-            f'/api/v1/assignments/{assignment.pk}/rubric/',
-            {
-                'criteria': [
-                    {
-                        'id': criterion.pk,
-                        'label': 'Changed',
-                        'max_points': '5.00',
-                        'position': 0,
-                        'levels': [],
-                    },
-                    {
-                        'label': 'New criterion',
-                        'max_points': '2.00',
-                        'position': 1,
-                        'levels': [
-                            {
-                                'description': 'New level',
-                                'points': '1.00',
-                                'position': 0,
-                            },
-                        ],
-                    },
-                ],
-            },
-            format='json',
-        )
+    response = client.put(
+        f'/api/v1/assignments/{assignment.pk}/rubric/',
+        {
+            'criteria': [
+                {
+                    'id': criterion.pk,
+                    'label': 'Changed',
+                    'max_points': '5.00',
+                    'position': 0,
+                    'levels': [],
+                },
+                {
+                    'label': 'New criterion',
+                    'max_points': '2.00',
+                    'position': 1,
+                    'levels': [
+                        {
+                            'description': 'New level',
+                            'points': '1.00',
+                            'position': 0,
+                        },
+                    ],
+                },
+            ],
+        },
+        format='json',
+    )
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.data['code'] == 'internal_error'
+    assert 'synthetic child write failure' not in response.data['message']
 
     criterion.refresh_from_db()
     level.refresh_from_db()
@@ -923,7 +925,7 @@ def test_assignment_publish_rejects_rubric_sum_that_differs_from_max_score(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'criteria' in response.data
+    assert 'criteria' in response.data['fields']
     assignment.refresh_from_db()
     assert assignment.state == Assignment.State.DRAFT
     assert assignment.published_at is None
@@ -1020,7 +1022,7 @@ def test_assignment_publish_requires_title_and_instructions(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert error_key in response.data
+    assert error_key in response.data['fields']
     assignment.refresh_from_db()
     assert assignment.state == Assignment.State.DRAFT
 
@@ -1060,7 +1062,7 @@ def test_assignment_publish_requires_a_zero_point_level_per_criterion(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert any(key.endswith('_levels') for key in response.data)
+    assert any(key.endswith('_levels') for key in response.data['fields'])
     assignment.refresh_from_db()
     assert assignment.state == Assignment.State.DRAFT
 
@@ -1316,7 +1318,7 @@ def test_my_draft_never_accepts_client_pupil_identity(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'pupil' in response.data
+    assert 'pupil' in response.data['fields']
     assert not Submission.objects.filter(
         assignment=assignment,
         pupil=other_pupil,

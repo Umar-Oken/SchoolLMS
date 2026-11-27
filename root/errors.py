@@ -1,5 +1,6 @@
 from django.http import JsonResponse
 from rest_framework import exceptions, status
+from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
 
 
@@ -28,7 +29,7 @@ def api_exception_handler(exc, context):
     response = drf_exception_handler(exc, context)
     request = context.get('request')
     if response is None:
-        return_response = JsonResponse(
+        return_response = Response(
             error_payload(
                 code='internal_error',
                 message='Internal server error.',

@@ -340,7 +340,7 @@ def test_weekly_slot_rejects_resource_conflicts(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert conflict_field in response.data
+    assert conflict_field in response.data['fields']
     assert WeeklySlot.objects.count() == 1
 
 
@@ -456,7 +456,7 @@ def test_weekly_slot_update_rejects_conflict_and_keeps_old_values(scheduling_dat
     target.refresh_from_db()
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'room' in response.data
+    assert 'room' in response.data['fields']
     assert target.room_id == scheduling_data['other_room'].pk
     assert target.start_time == time(9)
     assert existing.pk != target.pk
@@ -966,7 +966,7 @@ def test_conflicting_occurrence_move_rolls_back(scheduling_data):
 
     session.refresh_from_db()
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'room' in response.data
+    assert 'room' in response.data['fields']
     assert session.status == LessonSession.Status.SCHEDULED
     assert session.scheduled_date == source_date
     assert not ScheduleException.objects.filter(session=session).exists()
@@ -1004,7 +1004,7 @@ def test_move_rejects_replacement_teacher_outside_course_scope(scheduling_data):
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'teacher' in response.data
+    assert 'teacher' in response.data['fields']
     assert not ScheduleException.objects.filter(session=session).exists()
 
 

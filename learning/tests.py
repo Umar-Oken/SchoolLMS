@@ -300,11 +300,11 @@ def test_closed_term_blocks_topic_writes_without_removing_published_history(
     )
 
     assert create_response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'term' in create_response.data
+    assert 'term' in create_response.data['fields']
     assert update_response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'term' in update_response.data
+    assert 'term' in update_response.data['fields']
     assert publish_response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'term' in publish_response.data
+    assert 'term' in publish_response.data['fields']
     assert Topic.objects.filter(pk=topic_api_data['published'].pk).exists()
     topic_api_data['draft'].refresh_from_db()
     assert topic_api_data['draft'].state == Topic.State.DRAFT
@@ -401,7 +401,7 @@ def test_topic_create_rejects_publish_or_teacher_fields(topic_api_data):
     response = client.post('/api/v1/topics/', payload, format='json')
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert {'state', 'published_at', 'teacher'} <= set(response.data)
+    assert {'state', 'published_at', 'teacher'} <= set(response.data['fields'])
     assert Topic.objects.count() == 3
 
 
@@ -423,7 +423,7 @@ def test_topic_create_rejects_term_from_another_academic_year(topic_api_data):
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'term' in response.data
+    assert 'term' in response.data['fields']
     assert Topic.objects.count() == 3
 
 
@@ -468,7 +468,9 @@ def test_topic_patch_rejects_parent_and_server_managed_fields(topic_api_data):
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert {'course', 'state', 'published_at', 'archived_at'} <= set(response.data)
+    assert {'course', 'state', 'published_at', 'archived_at'} <= set(
+        response.data['fields'],
+    )
     topic.refresh_from_db()
     assert topic.course_id == topic_api_data['course_a'].pk
     assert topic.state == Topic.State.DRAFT
@@ -751,7 +753,7 @@ def test_publish_rejects_blank_title_or_objective(topic_api_data, field, value):
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert field in response.data
+    assert field in response.data['fields']
     topic.refresh_from_db()
     assert topic.state == Topic.State.DRAFT
     assert topic.published_at is None
@@ -773,7 +775,7 @@ def test_publish_rejects_topic_with_term_from_another_year(topic_api_data):
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'term' in response.data
+    assert 'term' in response.data['fields']
     topic.refresh_from_db()
     assert topic.state == Topic.State.DRAFT
     assert topic.published_at is None
@@ -984,7 +986,7 @@ def test_resource_create_rejects_state_version_and_parent_injection(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert {'state', 'version', 'topic'} <= set(response.data)
+    assert {'state', 'version', 'topic'} <= set(response.data['fields'])
     assert not Resource.objects.exists()
 
 
@@ -1430,7 +1432,7 @@ def test_completion_does_not_accept_another_user_or_kind(topic_api_data):
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert {'pupil', 'kind'} <= set(response.data)
+    assert {'pupil', 'kind'} <= set(response.data['fields'])
     assert not Completion.objects.exists()
 
 

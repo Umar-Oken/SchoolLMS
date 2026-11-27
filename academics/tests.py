@@ -1658,9 +1658,9 @@ def test_school_class_catalog_rejects_duplicate_and_preserves_year_identity(
         format='json',
     )
     assert moved.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'year' in moved.data
+    assert 'year' in moved.data['fields']
     assert renamed.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'grade_level' in renamed.data
+    assert 'grade_level' in renamed.data['fields']
 
     historic_class.refresh_from_db()
     assert historic_class.year_id != next_year.pk
@@ -1796,7 +1796,7 @@ def test_archiving_subject_preserves_course_history_and_hides_it_from_options(
         format='json',
     )
     assert create_course.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'subject' in create_course.data
+    assert 'subject' in create_course.data['fields']
 
 
 @pytest.mark.django_db(transaction=True)
@@ -1869,7 +1869,7 @@ def test_teacher_assignment_api_limits_teacher_profile_and_rejects_self_grant(
         format="json",
     )
     assert pupil_assignment.status_code == status.HTTP_400_BAD_REQUEST
-    assert "teacher" in pupil_assignment.data
+    assert "teacher" in pupil_assignment.data['fields']
     assert not TeachingAssignment.objects.filter(teacher=pupil).exists()
 
     operator_self_grant = operator_client.post(
@@ -1883,7 +1883,7 @@ def test_teacher_assignment_api_limits_teacher_profile_and_rejects_self_grant(
         format="json",
     )
     assert operator_self_grant.status_code == status.HTTP_400_BAD_REQUEST
-    assert "teacher" in operator_self_grant.data
+    assert "teacher" in operator_self_grant.data['fields']
 
     operator_self_assignment = operator_client.post(
         "/api/v1/admin/teaching-assignments/",
@@ -1896,7 +1896,7 @@ def test_teacher_assignment_api_limits_teacher_profile_and_rejects_self_grant(
         format="json",
     )
     assert operator_self_assignment.status_code == status.HTTP_400_BAD_REQUEST
-    assert "teacher" in operator_self_assignment.data
+    assert "teacher" in operator_self_assignment.data['fields']
     assert not TeachingAssignment.objects.filter(
         course=course_api_data["course_a"],
         teacher=operator,
@@ -2215,16 +2215,18 @@ def test_class_membership_api_rolls_back_partial_transfer(
 
     monkeypatch.setattr(Enrollment, "save", fail_save)
 
-    with pytest.raises(RuntimeError, match="Sintetik enrollment yozuv xatosi"):
-        client.post(
-            "/api/v1/admin/class-memberships/",
-            {
-                "pupil": pupil.pk,
-                "school_class": course_api_data["course_b"].school_class_id,
-                "start_date": timezone.localdate().isoformat(),
-            },
-            format="json",
-        )
+    response = client.post(
+        "/api/v1/admin/class-memberships/",
+        {
+            "pupil": pupil.pk,
+            "school_class": course_api_data["course_b"].school_class_id,
+            "start_date": timezone.localdate().isoformat(),
+        },
+        format="json",
+    )
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.data['code'] == 'internal_error'
+    assert 'Sintetik enrollment yozuv xatosi' not in response.data['message']
 
     old_membership.refresh_from_db()
     old_enrollment.refresh_from_db()

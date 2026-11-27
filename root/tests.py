@@ -91,7 +91,8 @@ def test_custom_conflict_csrf_and_internal_errors_use_safe_envelope():
     assert csrf.status_code == status.HTTP_403_FORBIDDEN
     assert json.loads(csrf.content)['code'] == 'csrf_failed'
     assert internal.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert 'secret traceback' not in internal.content.decode()
+    assert internal.data['code'] == 'internal_error'
+    assert 'secret traceback' not in internal.data['message']
 
 
 @override_settings(

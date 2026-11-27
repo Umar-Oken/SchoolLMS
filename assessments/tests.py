@@ -116,7 +116,7 @@ def test_question_create_requires_exactly_one_correct_option(
     )
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'options' in response.data
+    assert 'options' in response.data['fields']
     assert Question.objects.count() == 0
 
 
@@ -202,7 +202,7 @@ def test_essay_rejects_option_key_and_keeps_marking_note_teacher_private(
         format='json',
     )
     assert rejected_response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'options' in rejected_response.data
+    assert 'options' in rejected_response.data['fields']
 
     response = client.post(
         '/api/v1/questions/',
@@ -344,7 +344,7 @@ def test_exam_rejects_invalid_times_duration_and_course_term(question_bank_data)
     payload['closes_at'] = payload['opens_at']
     response = client.post('/api/v1/exams/', payload, format='json')
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'closes_at' in response.data
+    assert 'closes_at' in response.data['fields']
 
     response = client.post(
         '/api/v1/exams/',
@@ -352,7 +352,7 @@ def test_exam_rejects_invalid_times_duration_and_course_term(question_bank_data)
         format='json',
     )
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'duration' in response.data
+    assert 'duration' in response.data['fields']
 
     response = client.post(
         '/api/v1/exams/',
@@ -360,7 +360,7 @@ def test_exam_rejects_invalid_times_duration_and_course_term(question_bank_data)
         format='json',
     )
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'term' in response.data
+    assert 'term' in response.data['fields']
 
     response = client.post(
         '/api/v1/exams/',
@@ -373,7 +373,7 @@ def test_exam_rejects_invalid_times_duration_and_course_term(question_bank_data)
     payload.pop('result_release_at')
     response = client.post('/api/v1/exams/', payload, format='json')
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert 'result_release_at' in response.data
+    assert 'result_release_at' in response.data['fields']
 
 
 @pytest.mark.django_db
